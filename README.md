@@ -12,7 +12,7 @@ export SNYK_TOKEN=<your-snyk-pat-or-service-account-token>
 ## Usage
 
 ```bash
-python snyk_commander.py
+python -m snyk_commander
 ```
 
 The tool will:
