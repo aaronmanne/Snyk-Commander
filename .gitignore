@@ -1,6 +1,5 @@
 /reports/
 /.snyk_cache/
-/.idea/*
 /.idea/
 # Python
 __pycache__/
