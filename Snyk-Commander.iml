@@ -6,6 +6,7 @@
       <excludeFolder url="file://$MODULE_DIR$/.snyk_cache" />
       <excludeFolder url="file://$MODULE_DIR$/.venv" />
       <excludeFolder url="file://$MODULE_DIR$/reports" />
+      <excludeFolder url="file://$MODULE_DIR$/snyk-ignores" />
     </content>
     <orderEntry type="sourceFolder" forTests="false" />
   </component>

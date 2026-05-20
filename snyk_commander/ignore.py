@@ -48,6 +48,7 @@ def _save_snyk_policy(policy: dict, vuln_metadata: dict | None = None) -> None:
                 f.write(f"  # CWE: {cwe_str}\n")
                 f.write(f"  # Severity: {v.get('severity', 'unknown')}\n")
                 f.write(f"  # Risk Score: {risk_display}\n")
+                f.write(f"  # Fixable: {'Yes' if v.get('fixable') else 'No'}\n")
                 f.write(f"  # Affected projects ({len(projects)}):\n")
                 for p in projects:
                     f.write(f"  #   - {p}\n")
@@ -282,19 +283,53 @@ def _is_not_fixable(issue: dict) -> bool:
 
 
 def _get_project_folder(project_name: str) -> str:
-    """Extract a folder-friendly name from the Snyk project name.
+    """Extract a folder path from the Snyk project name.
 
-    Snyk project names look like: org/repo(branch):path/to/manifest.txt
-    We use the repo name as the folder.
+    Snyk project names look like: org/repo(branch):subpath/to/manifest.txt
+    We produce: repo/subpath/to (the directory containing the manifest).
+    For names like: ms-reports:env-dev:/home/nonroot/app/datadog
+    We produce: ms-reports/home/nonroot/app/datadog
     """
     name = project_name
-    if "/" in name:
+
+    # Strip org prefix (before first /)
+    if "/" in name.split("(")[0].split(":")[0]:
         name = name.split("/", 1)[1]
+
+    # Extract repo (before branch parens or first colon)
+    repo = name
+    subpath = ""
+
     if "(" in name:
-        name = name.split("(", 1)[0]
-    if ":" in name:
-        name = name.split(":", 1)[0]
-    return name.strip() or "unknown_project"
+        repo = name.split("(", 1)[0]
+        remainder = name.split(")", 1)[1] if ")" in name else ""
+        if remainder.startswith(":"):
+            subpath = remainder[1:]
+    elif ":" in name:
+        parts = name.split(":", 1)
+        repo = parts[0]
+        subpath = parts[1]
+        # Handle double-colon patterns like ms-reports:env-dev:/path
+        if subpath.startswith("env-") and ":" in subpath:
+            subpath = subpath.split(":", 1)[1]
+            if subpath.startswith("/"):
+                subpath = subpath[1:]
+
+    # subpath is like "lambdas/data_extract/requirements.txt" — take the directory
+    if subpath:
+        # Remove the manifest filename (last component if it has an extension)
+        parts = subpath.rsplit("/", 1)
+        if len(parts) == 2 and "." in parts[1]:
+            subpath = parts[0]
+        elif "." in subpath and "/" not in subpath:
+            subpath = ""
+
+    repo = repo.strip()
+    subpath = subpath.strip().strip("/")
+
+    if subpath:
+        return f"{repo}/{subpath}"
+    return repo or "unknown_project"
 
 
 def _save_project_snyk_file(folder: Path, policy: dict, vuln_metadata: dict) -> None:
@@ -318,6 +353,7 @@ def _save_project_snyk_file(folder: Path, policy: dict, vuln_metadata: dict) -> 
                 f.write(f"  # Severity: {v.get('severity', 'unknown')}\n")
                 f.write(f"  # Risk Score: {risk_display}\n")
                 f.write(f"  # Reachability: {v.get('reachability', 'N/A')}\n")
+                f.write(f"  # Fixable: {'Yes' if v.get('fixable') else 'No'}\n")
 
             f.write(f"  {vuln_id}:\n")
             for entry in entries:
@@ -391,6 +427,7 @@ def _generate_per_project_ignores(results: list[dict]) -> None:
                     "risk_score": score,
                     "cwe": issue_data.get("identifiers", {}).get("CWE", []),
                     "reachability": reachability,
+                    "fixable": False,
                 }
                 proj_ignore_count += 1
 
@@ -416,21 +453,212 @@ def _generate_per_project_ignores(results: list[dict]) -> None:
         console.print("\n[yellow]No vulnerabilities matched the criteria for any project.[/yellow]")
 
 
-def manage_ignores(results: list[dict]) -> None:
+def _update_allowed_ignored(results: list[dict], client=None, org: dict | None = None) -> None:
+    """Ignore vulns with risk score < 400 and no fix available via the Snyk API.
+
+    Shows the user a list of what will be ignored/updated/unignored, then
+    connects to Snyk to apply the changes after confirmation.
+    """
+    from rich.table import Table
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn
+
+    if client is None or org is None:
+        console.print("[red]Error: API client and org are required for this option.[/red]")
+        return
+
+    org_id = org["id"]
+
+    console.print("\n[bold cyan]Update Allowed Ignored[/bold cyan]")
+    console.print("[dim]Criteria: risk score < 400 AND no fix available[/dim]")
+    console.print("[dim]Action: ignore temporarily for 90 days or until fix is available[/dim]\n")
+
+    # Build a map of all issues across projects, tracking which project(s) each vuln appears in
+    # We need project_id to call the API
+    all_issues: dict[str, dict] = {}  # vuln_id -> merged info
+    for proj in results:
+        project_id = proj.get("id", "")
+        for issue in proj.get("issues", []):
+            issue_data = issue.get("issueData", {})
+            vuln_id = issue.get("id") or issue_data.get("id", "")
+            if not vuln_id:
+                continue
+
+            priority = issue.get("priority", {})
+            score = priority.get("score")
+            fixable = not _is_not_fixable(issue)
+
+            if vuln_id not in all_issues:
+                all_issues[vuln_id] = {
+                    "id": vuln_id,
+                    "title": issue_data.get("title", vuln_id),
+                    "severity": issue_data.get("severity", "medium"),
+                    "risk_score": score,
+                    "fixable": fixable,
+                    "cwe": issue_data.get("identifiers", {}).get("CWE", []),
+                    "project_ids": {project_id},
+                    "projects": [proj.get("name", "Unknown")],
+                }
+            else:
+                existing = all_issues[vuln_id]
+                existing["project_ids"].add(project_id)
+                existing["projects"].append(proj.get("name", "Unknown"))
+                if fixable:
+                    existing["fixable"] = True
+                if score and (existing["risk_score"] is None or score > existing["risk_score"]):
+                    existing["risk_score"] = score
+
+    # Categorize vulns into actions
+    to_ignore: list[dict] = []   # new ignores
+    to_update: list[dict] = []   # existing ignores that need date refresh
+    to_unignore: list[dict] = [] # previously ignored but fix now available
+
+    # Load existing .snyk to detect already-ignored vulns
+    policy = _load_snyk_policy()
+    existing_ignores = policy.get("ignore", {})
+
+    for vuln_id, info in all_issues.items():
+        score = info["risk_score"]
+        fixable = info["fixable"]
+
+        score_qualifies = False
+        if score is not None:
+            try:
+                score_qualifies = int(score) < 400
+            except (ValueError, TypeError):
+                pass
+
+        already_ignored = vuln_id in existing_ignores
+
+        if score_qualifies and not fixable:
+            if already_ignored:
+                to_update.append(info)
+            else:
+                to_ignore.append(info)
+        elif already_ignored and fixable:
+            to_unignore.append(info)
+
+    # Show summary to user
+    if not to_ignore and not to_update and not to_unignore:
+        console.print("[dim]No changes needed — no vulnerabilities matched criteria.[/dim]")
+        return
+
+    if to_ignore:
+        console.print(f"\n[bold green]Will IGNORE ({len(to_ignore)} vulnerabilities):[/bold green]")
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Vuln ID", style="dim", max_width=30)
+        table.add_column("Title", max_width=45)
+        table.add_column("Score", justify="right")
+        table.add_column("Severity")
+        table.add_column("Projects", justify="right")
+        for v in to_ignore:
+            table.add_row(v["id"], v["title"][:45], str(v["risk_score"]),
+                          v["severity"], str(len(v["project_ids"])))
+        console.print(table)
+
+    if to_update:
+        console.print(f"\n[bold yellow]Will UPDATE expiration ({len(to_update)} vulnerabilities):[/bold yellow]")
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Vuln ID", style="dim", max_width=30)
+        table.add_column("Title", max_width=45)
+        table.add_column("Score", justify="right")
+        table.add_column("Severity")
+        table.add_column("Fixable?")
+        for v in to_update:
+            fixable_str = "[green]Yes[/green]" if v["fixable"] else "[red]No[/red]"
+            table.add_row(v["id"], v["title"][:45], str(v["risk_score"]), v["severity"], fixable_str)
+        console.print(table)
+
+    if to_unignore:
+        console.print(f"\n[bold red]Will UNIGNORE (fix now available) ({len(to_unignore)} vulnerabilities):[/bold red]")
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Vuln ID", style="dim", max_width=30)
+        table.add_column("Title", max_width=45)
+        table.add_column("Score", justify="right")
+        table.add_column("Severity")
+        for v in to_unignore:
+            table.add_row(v["id"], v["title"][:45], str(v["risk_score"]), v["severity"])
+        console.print(table)
+
+    total = len(to_ignore) + len(to_update) + len(to_unignore)
+    console.print(f"\n[bold]Total changes: {total}[/bold]")
+    console.print(f"  Ignore: {len(to_ignore)} | Update: {len(to_update)} | Unignore: {len(to_unignore)}")
+
+    if not Confirm.ask("\n[bold]Proceed and apply these changes via the Snyk API?[/bold]", default=False):
+        console.print("[dim]Cancelled — no changes made.[/dim]")
+        return
+
+    # Apply changes via Snyk API
+    reason = "Low / No risk, no known fix available."
+    expires = (datetime.utcnow() + timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+    # Build list of API calls: (action, vuln_id, project_id)
+    api_calls: list[tuple[str, str, str]] = []
+    for v in to_ignore + to_update:
+        for pid in v["project_ids"]:
+            api_calls.append(("ignore", v["id"], pid))
+    for v in to_unignore:
+        for pid in v["project_ids"]:
+            api_calls.append(("unignore", v["id"], pid))
+
+    success = 0
+    errors = 0
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Applying ignores via Snyk API", total=len(api_calls))
+
+        def _apply(call):
+            action, vuln_id, project_id = call
+            if action == "ignore":
+                client.ignore_issue(org_id, project_id, vuln_id,
+                                    reason=reason, expires=expires,
+                                    disregard_if_fixable=True)
+            else:
+                client.unignore_issue(org_id, project_id, vuln_id)
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(_apply, c): c for c in api_calls}
+            for future in as_completed(futures):
+                call = futures[future]
+                try:
+                    future.result()
+                    success += 1
+                except Exception as e:
+                    errors += 1
+                    console.print(f"  [red]✗[/red] Failed {call[0]} {call[1]} in project {call[2]}: {e}")
+                progress.advance(task)
+
+    console.print(f"\n[bold green]Done![/bold green] {success} API call(s) succeeded, {errors} failed.")
+    if errors:
+        console.print("[yellow]Some operations failed — check errors above.[/yellow]")
+
+
+def manage_ignores(results: list[dict], client=None, org: dict | None = None) -> None:
     """Interactive workflow to review vulnerabilities and add ignores to .snyk."""
 
     # Top-level choice: per-unique-vuln or per-project defaults
     console.print("\n[bold cyan]Manage .snyk Ignores[/bold cyan]")
-    console.print("  [cyan]1[/cyan] - Fixable vulnerabilities only")
-    console.print("  [cyan]2[/cyan] - Non-fixable vulnerabilities only")
-    console.print("  [cyan]3[/cyan] - All vulnerabilities")
-    console.print("  [cyan]4[/cyan] - Generate default ignores for all projects")
+    console.print("  [cyan]1[/cyan] - Generate default ignores for all projects")
+    console.print("  [cyan]2[/cyan] - Fixable vulnerabilities only")
+    console.print("  [cyan]3[/cyan] - Non-fixable vulnerabilities only")
+    console.print("  [cyan]4[/cyan] - All vulnerabilities")
+    console.print("  [cyan]5[/cyan] - Update Allowed Ignored")
     console.print()
 
-    top_choice = Prompt.ask("Choose", choices=["1", "2", "3", "4"], default="3")
+    top_choice = Prompt.ask("Choose", choices=["1", "2", "3", "4", "5"], default="1")
 
-    if top_choice == "4":
+    if top_choice == "1":
         _generate_per_project_ignores(results)
+        return
+
+    if top_choice == "5":
+        _update_allowed_ignored(results, client=client, org=org)
         return
 
     all_vulns = _extract_unique_vulns(results)
@@ -439,10 +667,10 @@ def manage_ignores(results: list[dict]) -> None:
         console.print("[green]No vulnerabilities found to ignore.[/green]")
         return
 
-    if top_choice == "1":
+    if top_choice == "2":
         vulns = [v for v in all_vulns if v["fixable"]]
         label = "fixable"
-    elif top_choice == "2":
+    elif top_choice == "3":
         vulns = [v for v in all_vulns if not v["fixable"]]
         label = "non-fixable"
     else:

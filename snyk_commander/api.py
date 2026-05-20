@@ -119,3 +119,34 @@ class SnykClient:
             resp = session.post(url, headers=self._headers_v1, json=body, timeout=REQUEST_TIMEOUT)
         resp.raise_for_status()
         return resp.json().get("issues", [])
+
+    def ignore_issue(self, org_id: str, project_id: str, issue_id: str,
+                     reason: str, expires: str, disregard_if_fixable: bool = True) -> dict:
+        """Ignore a vulnerability in Snyk via the API.
+
+        POST /org/{orgId}/project/{projectId}/ignore/{issueId}
+        """
+        session = self._get_session()
+        url = f"{API_V1}/org/{org_id}/project/{project_id}/ignore/{issue_id}"
+        body = {
+            "ignorePath": "*",
+            "reason": reason,
+            "expires": expires,
+            "disregardIfFixable": disregard_if_fixable,
+            "reasonType": "temporary-ignore",
+        }
+        with api_semaphore:
+            resp = session.post(url, headers=self._headers_v1, json=body, timeout=REQUEST_TIMEOUT)
+        resp.raise_for_status()
+        return resp.json()
+
+    def unignore_issue(self, org_id: str, project_id: str, issue_id: str) -> None:
+        """Remove an ignore for a vulnerability in Snyk via the API.
+
+        DELETE /org/{orgId}/project/{projectId}/ignore/{issueId}
+        """
+        session = self._get_session()
+        url = f"{API_V1}/org/{org_id}/project/{project_id}/ignore/{issue_id}"
+        with api_semaphore:
+            resp = session.delete(url, headers=self._headers_v1, timeout=REQUEST_TIMEOUT)
+        resp.raise_for_status()
