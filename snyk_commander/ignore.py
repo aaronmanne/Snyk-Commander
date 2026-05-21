@@ -332,6 +332,47 @@ def _get_project_folder(project_name: str) -> str:
     return repo or "unknown_project"
 
 
+def _get_project_display_path(project_name: str) -> str:
+    """Extract a display path from the Snyk project name including the manifest.
+
+    Snyk project names look like: org/repo(branch):subpath/to/manifest.txt
+    We produce: repo/subpath/to/manifest.txt
+    For names like: ms-reports:env-dev:/home/nonroot/app/datadog
+    We produce: ms-reports/home/nonroot/app/datadog
+    """
+    name = project_name
+
+    # Strip org prefix (before first /)
+    if "/" in name.split("(")[0].split(":")[0]:
+        name = name.split("/", 1)[1]
+
+    # Extract repo (before branch parens or first colon)
+    repo = name
+    subpath = ""
+
+    if "(" in name:
+        repo = name.split("(", 1)[0]
+        remainder = name.split(")", 1)[1] if ")" in name else ""
+        if remainder.startswith(":"):
+            subpath = remainder[1:]
+    elif ":" in name:
+        parts = name.split(":", 1)
+        repo = parts[0]
+        subpath = parts[1]
+        # Handle double-colon patterns like ms-reports:env-dev:/path
+        if subpath.startswith("env-") and ":" in subpath:
+            subpath = subpath.split(":", 1)[1]
+            if subpath.startswith("/"):
+                subpath = subpath[1:]
+
+    repo = repo.strip()
+    subpath = subpath.strip().strip("/")
+
+    if subpath:
+        return f"{repo}/{subpath}"
+    return repo or "unknown_project"
+
+
 def _save_project_snyk_file(folder: Path, policy: dict, vuln_metadata: dict) -> None:
     """Write a .snyk file for a specific project folder."""
     folder.mkdir(parents=True, exist_ok=True)
@@ -458,6 +499,7 @@ def _update_allowed_ignored(results: list[dict], client=None, org: dict | None =
 
     Shows the user a list of what will be ignored/updated/unignored, then
     connects to Snyk to apply the changes after confirmation.
+    Each vuln+project combination is treated individually (not grouped).
     """
     from rich.table import Table
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -473,11 +515,12 @@ def _update_allowed_ignored(results: list[dict], client=None, org: dict | None =
     console.print("[dim]Criteria: risk score < 400 AND no fix available[/dim]")
     console.print("[dim]Action: ignore temporarily for 90 days or until fix is available[/dim]\n")
 
-    # Build a map of all issues across projects, tracking which project(s) each vuln appears in
-    # We need project_id to call the API
-    all_issues: dict[str, dict] = {}  # vuln_id -> merged info
+    # Build a flat list of (vuln, project) entries — no deduplication across projects
+    # Each entry represents one vuln in one specific project/manifest
+    entries: list[dict] = []
     for proj in results:
         project_id = proj.get("id", "")
+        project_name = proj.get("name", "Unknown")
         for issue in proj.get("issues", []):
             issue_data = issue.get("issueData", {})
             vuln_id = issue.get("id") or issue_data.get("id", "")
@@ -488,27 +531,18 @@ def _update_allowed_ignored(results: list[dict], client=None, org: dict | None =
             score = priority.get("score")
             fixable = not _is_not_fixable(issue)
 
-            if vuln_id not in all_issues:
-                all_issues[vuln_id] = {
-                    "id": vuln_id,
-                    "title": issue_data.get("title", vuln_id),
-                    "severity": issue_data.get("severity", "medium"),
-                    "risk_score": score,
-                    "fixable": fixable,
-                    "cwe": issue_data.get("identifiers", {}).get("CWE", []),
-                    "project_ids": {project_id},
-                    "projects": [proj.get("name", "Unknown")],
-                }
-            else:
-                existing = all_issues[vuln_id]
-                existing["project_ids"].add(project_id)
-                existing["projects"].append(proj.get("name", "Unknown"))
-                if fixable:
-                    existing["fixable"] = True
-                if score and (existing["risk_score"] is None or score > existing["risk_score"]):
-                    existing["risk_score"] = score
+            entries.append({
+                "vuln_id": vuln_id,
+                "title": issue_data.get("title", vuln_id),
+                "severity": issue_data.get("severity", "medium"),
+                "risk_score": score,
+                "fixable": fixable,
+                "project_id": project_id,
+                "project_name": project_name,
+                "display_path": _get_project_display_path(project_name),
+            })
 
-    # Categorize vulns into actions
+    # Categorize entries into actions
     to_ignore: list[dict] = []   # new ignores
     to_update: list[dict] = []   # existing ignores that need date refresh
     to_unignore: list[dict] = [] # previously ignored but fix now available
@@ -517,9 +551,9 @@ def _update_allowed_ignored(results: list[dict], client=None, org: dict | None =
     policy = _load_snyk_policy()
     existing_ignores = policy.get("ignore", {})
 
-    for vuln_id, info in all_issues.items():
-        score = info["risk_score"]
-        fixable = info["fixable"]
+    for entry in entries:
+        score = entry["risk_score"]
+        fixable = entry["fixable"]
 
         score_qualifies = False
         if score is not None:
@@ -528,15 +562,15 @@ def _update_allowed_ignored(results: list[dict], client=None, org: dict | None =
             except (ValueError, TypeError):
                 pass
 
-        already_ignored = vuln_id in existing_ignores
+        already_ignored = entry["vuln_id"] in existing_ignores
 
         if score_qualifies and not fixable:
             if already_ignored:
-                to_update.append(info)
+                to_update.append(entry)
             else:
-                to_ignore.append(info)
+                to_ignore.append(entry)
         elif already_ignored and fixable:
-            to_unignore.append(info)
+            to_unignore.append(entry)
 
     # Show summary to user
     if not to_ignore and not to_update and not to_unignore:
@@ -544,40 +578,47 @@ def _update_allowed_ignored(results: list[dict], client=None, org: dict | None =
         return
 
     if to_ignore:
-        console.print(f"\n[bold green]Will IGNORE ({len(to_ignore)} vulnerabilities):[/bold green]")
+        console.print(f"\n[bold green]Will IGNORE ({len(to_ignore)} entries):[/bold green]")
         table = Table(show_header=True, header_style="bold")
+        table.add_column("Project", max_width=50)
         table.add_column("Vuln ID", style="dim", max_width=30)
         table.add_column("Title", max_width=45)
         table.add_column("Score", justify="right")
         table.add_column("Severity")
-        table.add_column("Projects", justify="right")
-        for v in to_ignore:
-            table.add_row(v["id"], v["title"][:45], str(v["risk_score"]),
-                          v["severity"], str(len(v["project_ids"])))
+        sorted_ignore = sorted(to_ignore, key=lambda e: (e["display_path"], -(e["risk_score"] or 0)))
+        for e in sorted_ignore:
+            table.add_row(e["display_path"], e["vuln_id"], e["title"][:45],
+                          str(e["risk_score"]), e["severity"])
         console.print(table)
 
     if to_update:
-        console.print(f"\n[bold yellow]Will UPDATE expiration ({len(to_update)} vulnerabilities):[/bold yellow]")
+        console.print(f"\n[bold yellow]Will UPDATE expiration ({len(to_update)} entries):[/bold yellow]")
         table = Table(show_header=True, header_style="bold")
+        table.add_column("Project", max_width=50)
         table.add_column("Vuln ID", style="dim", max_width=30)
         table.add_column("Title", max_width=45)
         table.add_column("Score", justify="right")
         table.add_column("Severity")
         table.add_column("Fixable?")
-        for v in to_update:
-            fixable_str = "[green]Yes[/green]" if v["fixable"] else "[red]No[/red]"
-            table.add_row(v["id"], v["title"][:45], str(v["risk_score"]), v["severity"], fixable_str)
+        sorted_update = sorted(to_update, key=lambda e: (e["display_path"], -(e["risk_score"] or 0)))
+        for e in sorted_update:
+            fixable_str = "[green]Yes[/green]" if e["fixable"] else "[red]No[/red]"
+            table.add_row(e["display_path"], e["vuln_id"], e["title"][:45],
+                          str(e["risk_score"]), e["severity"], fixable_str)
         console.print(table)
 
     if to_unignore:
-        console.print(f"\n[bold red]Will UNIGNORE (fix now available) ({len(to_unignore)} vulnerabilities):[/bold red]")
+        console.print(f"\n[bold red]Will UNIGNORE (fix now available) ({len(to_unignore)} entries):[/bold red]")
         table = Table(show_header=True, header_style="bold")
+        table.add_column("Project", max_width=50)
         table.add_column("Vuln ID", style="dim", max_width=30)
         table.add_column("Title", max_width=45)
         table.add_column("Score", justify="right")
         table.add_column("Severity")
-        for v in to_unignore:
-            table.add_row(v["id"], v["title"][:45], str(v["risk_score"]), v["severity"])
+        sorted_unignore = sorted(to_unignore, key=lambda e: (e["display_path"], -(e["risk_score"] or 0)))
+        for e in sorted_unignore:
+            table.add_row(e["display_path"], e["vuln_id"], e["title"][:45],
+                          str(e["risk_score"]), e["severity"])
         console.print(table)
 
     total = len(to_ignore) + len(to_update) + len(to_unignore)
@@ -594,12 +635,10 @@ def _update_allowed_ignored(results: list[dict], client=None, org: dict | None =
 
     # Build list of API calls: (action, vuln_id, project_id)
     api_calls: list[tuple[str, str, str]] = []
-    for v in to_ignore + to_update:
-        for pid in v["project_ids"]:
-            api_calls.append(("ignore", v["id"], pid))
-    for v in to_unignore:
-        for pid in v["project_ids"]:
-            api_calls.append(("unignore", v["id"], pid))
+    for e in to_ignore + to_update:
+        api_calls.append(("ignore", e["vuln_id"], e["project_id"]))
+    for e in to_unignore:
+        api_calls.append(("unignore", e["vuln_id"], e["project_id"]))
 
     success = 0
     errors = 0

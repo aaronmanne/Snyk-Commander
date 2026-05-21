@@ -131,26 +131,30 @@ def main():
     console.print(f"[green]Authenticated.[/green] Found {len(orgs)} org(s).\n")
 
     # Check for cached results
-    cached = cache.load()
+    cached_orgs = cache.load_all()
     use_cache = False
-    if cached:
-        ts = cached.get("timestamp", "unknown")
-        cached_org = cached.get("org", {})
-        cached_results = cached.get("results", [])
-        fixable_count = sum(1 for r in cached_results if r.get("fixable"))
-        console.print(f"[bold yellow]Found cached scan results from {ts}[/bold yellow]")
-        console.print(f"  Org: {cached_org.get('name', '?')}  |  "
-                      f"{len(cached_results)} projects  |  "
-                      f"{fixable_count} fixable")
+    if cached_orgs:
+        console.print(f"[bold yellow]Found cached scan results for {len(cached_orgs)} org(s):[/bold yellow]")
+        for c in cached_orgs:
+            ts = c.get("timestamp", "unknown")
+            c_org = c.get("org", {})
+            c_results = c.get("results", [])
+            fixable_count = sum(1 for r in c_results if r.get("fixable"))
+            console.print(f"  • {c_org.get('name', '?')} — {ts}  |  "
+                          f"{len(c_results)} projects  |  "
+                          f"{fixable_count} fixable")
         if Confirm.ask("\n[bold]Resume from cache?[/bold]", default=True):
             use_cache = True
         else:
-            cache.delete()
+            cache.delete_all()
 
     if use_cache:
-        org = cached_org
-        results = cached_results
-        _show_and_menu(org, results, scanner, cache, menu)
+        for c in cached_orgs:
+            org = c["org"]
+            results = c["results"]
+            action = _show_and_menu(org, results, scanner, cache, menu)
+            if action == "exit":
+                break
     else:
         # Let user pick an org
         for idx, o in enumerate(orgs, 1):
@@ -189,7 +193,7 @@ def _show_and_menu(org, results, scanner, cache, menu) -> str:
 
     action = menu.show(org, results)
     if action == "rescan":
-        cache.delete()
+        cache.delete(org["id"])
         results = scanner.scan(org)
         if results:
             cache.save(org, results)

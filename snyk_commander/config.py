@@ -13,7 +13,6 @@ MAX_RETRIES = 3
 REQUEST_TIMEOUT = 60
 CONCURRENT_REQUESTS = 15
 CACHE_DIR = Path(__file__).parent.parent / ".snyk_cache"
-CACHE_FILE = CACHE_DIR / "scan_results.json"
 REPORTS_DIR = Path(__file__).parent.parent / "reports"
 
 console = Console()
