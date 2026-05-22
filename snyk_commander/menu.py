@@ -24,14 +24,14 @@ class OptionsMenu:
             console.print("\n[bold cyan]╔══════════════════════════════════╗[/bold cyan]")
             console.print("[bold cyan]║          Options Menu            ║[/bold cyan]")
             console.print("[bold cyan]╚══════════════════════════════════╝[/bold cyan]\n")
-            console.print("  [cyan]1[/cyan] - View vulnerability summary table")
-            console.print("  [cyan]2[/cyan] - Manage .snyk ignores")
+            console.print("  [cyan]1[/cyan] - View Vulnerability Summary")
+            console.print("  [cyan]2[/cyan] - Manage Ignores")
             console.print("  [cyan]3[/cyan] - Generate report (Markdown + CSV)")
-            console.print("  [cyan]4[/cyan] - Rescan org")
+            console.print("  [cyan]4[/cyan] - Rescan Org")
             console.print("  [cyan]5[/cyan] - Exit")
             console.print()
 
-            choice = Prompt.ask("Choose an option", choices=["1", "2", "3", "4", "5"], default="1")
+            choice = Prompt.ask("Choose an option", default="1")
 
             if choice == "1":
                 vuln_results = [r for r in results if r.get("total_vulns", 0) > 0]

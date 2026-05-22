@@ -682,22 +682,28 @@ def manage_ignores(results: list[dict], client=None, org: dict | None = None) ->
     """Interactive workflow to review vulnerabilities and add ignores to .snyk."""
 
     # Top-level choice: per-unique-vuln or per-project defaults
-    console.print("\n[bold cyan]Manage .snyk Ignores[/bold cyan]")
-    console.print("  [cyan]1[/cyan] - Generate default ignores for all projects")
-    console.print("  [cyan]2[/cyan] - Fixable vulnerabilities only")
-    console.print("  [cyan]3[/cyan] - Non-fixable vulnerabilities only")
-    console.print("  [cyan]4[/cyan] - All vulnerabilities")
-    console.print("  [cyan]5[/cyan] - Update Allowed Ignored")
+    console.print("\n[bold cyan]Manage SNYK Ignores[/bold cyan]")
+    console.print("  [cyan]1[/cyan] - [API] Update Allowed Ignored")
+    console.print("  [cyan]2[/cyan] - [.snyk] Generate default ignores for all projects")
+    console.print("  [cyan]3[/cyan] - [.snyk] Fixable vulnerabilities only")
+    console.print("  [cyan]4[/cyan] - [.snyk] Non-fixable vulnerabilities only")
+    console.print("  [cyan]5[/cyan] - [.snyk] All vulnerabilities")
+    console.print("  [cyan]6[/cyan] - Previous menu")
     console.print()
 
-    top_choice = Prompt.ask("Choose", choices=["1", "2", "3", "4", "5"], default="1")
+    top_choice = Prompt.ask("Choose an option (1) ")
+    if not top_choice:
+        top_choice = "1"
 
-    if top_choice == "1":
-        _generate_per_project_ignores(results)
+    if top_choice == "6":
         return
 
-    if top_choice == "5":
+    if top_choice == "1":
         _update_allowed_ignored(results, client=client, org=org)
+        return
+
+    if top_choice == "2":
+        _generate_per_project_ignores(results)
         return
 
     all_vulns = _extract_unique_vulns(results)
@@ -706,10 +712,10 @@ def manage_ignores(results: list[dict], client=None, org: dict | None = None) ->
         console.print("[green]No vulnerabilities found to ignore.[/green]")
         return
 
-    if top_choice == "2":
+    if top_choice == "3":
         vulns = [v for v in all_vulns if v["fixable"]]
         label = "fixable"
-    elif top_choice == "3":
+    elif top_choice == "4":
         vulns = [v for v in all_vulns if not v["fixable"]]
         label = "non-fixable"
     else:
@@ -726,9 +732,15 @@ def manage_ignores(results: list[dict], client=None, org: dict | None = None) ->
     console.print("[bold cyan]How would you like to proceed?[/bold cyan]")
     console.print("  [cyan]1[/cyan] - Review each vulnerability one by one")
     console.print("  [cyan]2[/cyan] - Accept all suggested ignores (auto-ignore based on risk score)")
+    console.print("  [cyan]3[/cyan] - Previous menu")
     console.print()
 
-    mode_choice = Prompt.ask("Choose", choices=["1", "2"], default="1")
+    mode_choice = Prompt.ask("Choose (1) ")
+    if not mode_choice:
+        mode_choice = "1"
+
+    if mode_choice == "3":
+        return
 
     # Load existing policy
     policy = _load_snyk_policy()
