@@ -77,7 +77,7 @@ def _check_dependencies() -> None:
             )
             print("  ✓ All packages installed\n")
             print("\033[1;33mPlease restart Snyk Commander using the venv Python:\033[0m\n")
-            print("  source .venv/bin/activate && python -m snyk_commander\n")
+            print("  source .venv/bin/activate && python -m snyk-commander\n")
 
         except subprocess.CalledProcessError as e:
             print(f"\nSetup failed: {e}")

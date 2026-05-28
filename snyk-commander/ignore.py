@@ -494,8 +494,11 @@ def _generate_per_project_ignores(results: list[dict]) -> None:
         console.print("\n[yellow]No vulnerabilities matched the criteria for any project.[/yellow]")
 
 
-def _update_allowed_ignored(results: list[dict], client=None, org: dict | None = None) -> None:
-    """Ignore vulns with risk score < 400 and no fix available via the Snyk API.
+def _update_allowed_ignored(results: list[dict], client=None, org: dict | None = None, require_high_risk: bool = True) -> None:
+    """Ignore non-fixable vulns via the Snyk API.
+
+    When require_high_risk=True: ignores non-fixable vulns with risk score >= 400.
+    When require_high_risk=False: ignores all non-fixable vulns regardless of risk score.
 
     Shows the user a list of what will be ignored/updated/unignored, then
     connects to Snyk to apply the changes after confirmation.
@@ -511,8 +514,12 @@ def _update_allowed_ignored(results: list[dict], client=None, org: dict | None =
 
     org_id = org["id"]
 
-    console.print("\n[bold cyan]Update Allowed Ignored[/bold cyan]")
-    console.print("[dim]Criteria: risk score < 400 AND no fix available[/dim]")
+    if require_high_risk:
+        console.print("\n[bold cyan]Ignore - NonFixable + Risk 400[/bold cyan]")
+        console.print("[dim]Criteria: risk score >= 400 AND no fix available[/dim]")
+    else:
+        console.print("\n[bold cyan]Ignore All Non-Fixable[/bold cyan]")
+        console.print("[dim]Criteria: no fix available (any risk score)[/dim]")
     console.print("[dim]Action: ignore temporarily for 90 days or until fix is available[/dim]\n")
 
     # Build a flat list of (vuln, project) entries — no deduplication across projects
@@ -555,16 +562,23 @@ def _update_allowed_ignored(results: list[dict], client=None, org: dict | None =
         score = entry["risk_score"]
         fixable = entry["fixable"]
 
-        score_qualifies = False
-        if score is not None:
-            try:
-                score_qualifies = int(score) < 400
-            except (ValueError, TypeError):
-                pass
+        # Determine if this entry qualifies for ignoring based on mode
+        if require_high_risk:
+            # Mode 1: Non-fixable AND risk score >= 400
+            score_qualifies = False
+            if score is not None:
+                try:
+                    score_qualifies = int(score) >= 400
+                except (ValueError, TypeError):
+                    pass
+            qualifies = score_qualifies and not fixable
+        else:
+            # Mode 2: All non-fixable (regardless of risk score)
+            qualifies = not fixable
 
         already_ignored = entry["vuln_id"] in existing_ignores
 
-        if score_qualifies and not fixable:
+        if qualifies:
             if already_ignored:
                 to_update.append(entry)
             else:
@@ -630,7 +644,10 @@ def _update_allowed_ignored(results: list[dict], client=None, org: dict | None =
         return
 
     # Apply changes via Snyk API
-    reason = "Low / No risk, no known fix available."
+    if require_high_risk:
+        reason = "No known fix available, risk score >= 400."
+    else:
+        reason = "No known fix available."
     expires = (datetime.utcnow() + timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
     # Build list of API calls: (action, vuln_id, project_id)
@@ -683,26 +700,31 @@ def manage_ignores(results: list[dict], client=None, org: dict | None = None) ->
 
     # Top-level choice: per-unique-vuln or per-project defaults
     console.print("\n[bold cyan]Manage SNYK Ignores[/bold cyan]")
-    console.print("  [cyan]1[/cyan] - [API] Update Allowed Ignored")
-    console.print("  [cyan]2[/cyan] - [.snyk] Generate default ignores for all projects")
-    console.print("  [cyan]3[/cyan] - [.snyk] Fixable vulnerabilities only")
-    console.print("  [cyan]4[/cyan] - [.snyk] Non-fixable vulnerabilities only")
-    console.print("  [cyan]5[/cyan] - [.snyk] All vulnerabilities")
-    console.print("  [cyan]6[/cyan] - Previous menu")
+    console.print("  [cyan]1[/cyan] - [API] Ignore - NonFixable + Risk 400")
+    console.print("  [cyan]2[/cyan] - [API] Ignore All Non-Fixable")
+    console.print("  [cyan]3[/cyan] - [.snyk] Generate default ignores for all projects")
+    console.print("  [cyan]4[/cyan] - [.snyk] Fixable vulnerabilities only")
+    console.print("  [cyan]5[/cyan] - [.snyk] Non-fixable vulnerabilities only")
+    console.print("  [cyan]6[/cyan] - [.snyk] All vulnerabilities")
+    console.print("  [cyan]7[/cyan] - Previous menu")
     console.print()
 
     top_choice = Prompt.ask("Choose an option (1) ")
     if not top_choice:
         top_choice = "1"
 
-    if top_choice == "6":
+    if top_choice == "7":
         return
 
     if top_choice == "1":
-        _update_allowed_ignored(results, client=client, org=org)
+        _update_allowed_ignored(results, client=client, org=org, require_high_risk=True)
         return
 
     if top_choice == "2":
+        _update_allowed_ignored(results, client=client, org=org, require_high_risk=False)
+        return
+
+    if top_choice == "3":
         _generate_per_project_ignores(results)
         return
 
@@ -712,10 +734,10 @@ def manage_ignores(results: list[dict], client=None, org: dict | None = None) ->
         console.print("[green]No vulnerabilities found to ignore.[/green]")
         return
 
-    if top_choice == "3":
+    if top_choice == "4":
         vulns = [v for v in all_vulns if v["fixable"]]
         label = "fixable"
-    elif top_choice == "4":
+    elif top_choice == "5":
         vulns = [v for v in all_vulns if not v["fixable"]]
         label = "non-fixable"
     else:

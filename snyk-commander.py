@@ -8,14 +8,14 @@ Supports authentication via:
 
 Usage:
   export SNYK_TOKEN=<your-token>
-  python snyk_commander.py
+  python snyk-commander.py
   # or
-  python -m snyk_commander
+  python -m snyk-commander
 """
 
 import sys
-from snyk_commander.__main__ import main
-from snyk_commander.config import console
+from snyk-commander.__main__ import main
+from snyk-commander.config import console
 
 if __name__ == "__main__":
     try:
