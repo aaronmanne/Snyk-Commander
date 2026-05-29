@@ -140,6 +140,48 @@ class SnykClient:
         resp.raise_for_status()
         return resp.json()
 
+    def get_ignored_issues(self, org_id: str, project_id: str) -> list[dict]:
+        """Get aggregated issues that are currently ignored for a project (v1 endpoint)."""
+        session = self._get_session()
+        url = f"{API_V1}/org/{org_id}/project/{project_id}/aggregated-issues"
+        body = {
+            "filters": {
+                "severities": ["critical", "high", "medium", "low"],
+                "types": ["vuln"],
+                "ignored": True,
+                "patched": False,
+            }
+        }
+        with api_semaphore:
+            resp = session.post(url, headers=self._headers_v1, json=body, timeout=REQUEST_TIMEOUT)
+        resp.raise_for_status()
+        return resp.json().get("issues", [])
+
+    def get_project_ignores(self, org_id: str, project_id: str) -> dict[str, str]:
+        """Return {vuln_id: expires_str} for all active ignores on a project.
+
+        Calls GET /org/{orgId}/project/{projectId}/ignores.
+        The Snyk response shape is:
+            { "SNYK-JS-FOO-123": [ { "*": [ { "reason": "...", "expires": "...", ... } ] } ] }
+        """
+        session = self._get_session()
+        url = f"{API_V1}/org/{org_id}/project/{project_id}/ignores"
+        with api_semaphore:
+            resp = session.get(url, headers=self._headers_v1, timeout=REQUEST_TIMEOUT)
+        resp.raise_for_status()
+        data = resp.json()
+        result: dict[str, str] = {}
+        for vuln_id, path_list in data.items():
+            # path_list is a list of {path_key: [detail_dicts]}
+            for path_entry in path_list:
+                for _path_key, details_list in path_entry.items():
+                    items = details_list if isinstance(details_list, list) else [details_list]
+                    for details in items:
+                        expires = details.get("expires")
+                        if expires and vuln_id not in result:
+                            result[vuln_id] = expires
+        return result
+
     def unignore_issue(self, org_id: str, project_id: str, issue_id: str) -> None:
         """Remove an ignore for a vulnerability in Snyk via the API.
 

@@ -18,16 +18,47 @@ class OrgScanner:
         self.client = client
         self.max_threads = max_threads
 
-    def _fetch_project_issues(self, org_id: str, proj: dict) -> dict:
-        """Fetch issues for a single project."""
+    def _fetch_project_data(self, org_id: str, proj: dict) -> tuple[dict, list, dict]:
+        """Fetch active issues, ignored issues, and ignore map for a single project.
+
+        All three API calls run sequentially inside one worker thread; because
+        every project gets its own thread the calls are effectively parallelised
+        across projects at no extra wall-clock cost.
+
+        Returns:
+            (scan_result_dict, ignored_issues, ignores_map)
+
+        Ignored-data failures are non-fatal — we fall back to empty collections
+        so a permission error on the ignores endpoint never blocks a scan.
+        """
+        # ── Active (non-ignored) issues — failure is fatal for this project ──
         try:
             issues = self.client.get_issues(org_id, proj["id"])
         except (requests.ConnectionError, requests.Timeout) as exc:
             raise RuntimeError(f"Connection error for {proj['name']}: {exc}") from exc
+
+        # ── Ignored issues — non-fatal ────────────────────────────────────────
+        try:
+            ignored_issues = self.client.get_ignored_issues(org_id, proj["id"])
+        except Exception:
+            ignored_issues = []
+
+        # ── Ignore expiry map — non-fatal ─────────────────────────────────────
+        try:
+            ignores_map = self.client.get_project_ignores(org_id, proj["id"])
+        except Exception:
+            ignores_map = {}
+
         sev = self._count_by_severity(issues)
         fixable = self._check_fixable(issues)
-        return {**proj, "issues": issues, "severity": sev, "fixable": fixable,
-                "total_vulns": sum(sev.values())}
+        scan_result = {
+            **proj,
+            "issues": issues,
+            "severity": sev,
+            "fixable": fixable,
+            "total_vulns": sum(sev.values()),
+        }
+        return scan_result, ignored_issues, ignores_map
 
     @staticmethod
     def _count_by_severity(issues: list[dict]) -> dict:
@@ -47,8 +78,13 @@ class OrgScanner:
                 return True
         return False
 
-    def scan(self, org: dict) -> list[dict]:
-        """Scan every project in an org using a thread pool with retry logic."""
+    def scan(self, org: dict, cache=None) -> list[dict]:
+        """Scan every project in an org using a thread pool with retry logic.
+
+        When *cache* is provided the ignored-issues data collected during
+        the scan is saved immediately so report generation never needs a
+        separate API round-trip.
+        """
         org_id = org["id"]
         console.print(f"\n[bold cyan]Scanning org:[/bold cyan] {org['name']} ({org_id})")
 
@@ -73,6 +109,9 @@ class OrgScanner:
         console.print(f"  Found [bold]{len(projects)}[/bold] projects. Scanning with {self.max_threads} threads…\n")
 
         results: list[dict] = []
+        # Accumulate ignored data keyed by project_id for the cache
+        ignored_data: dict[str, dict] = {}
+
         pending = list(projects)
         attempt_counts: dict[str, int] = {}
         permanently_failed: list[dict] = []
@@ -100,7 +139,7 @@ class OrgScanner:
 
                 with ThreadPoolExecutor(max_workers=self.max_threads) as executor:
                     future_to_proj = {
-                        executor.submit(self._fetch_project_issues, org_id, proj): proj
+                        executor.submit(self._fetch_project_data, org_id, proj): proj
                         for proj in pending
                     }
 
@@ -110,8 +149,12 @@ class OrgScanner:
                         attempt_counts[pid] = attempt_counts.get(pid, 0) + 1
 
                         try:
-                            result = future.result()
-                            results.append(result)
+                            scan_result, ignored_issues, ignores_map = future.result()
+                            results.append(scan_result)
+                            ignored_data[pid] = {
+                                "ignored_issues": ignored_issues,
+                                "ignores_map": ignores_map,
+                            }
                             progress.update(task_id, advance=1, status=f"[green]OK[/green] {proj['name'][:40]}")
                         except Exception:
                             attempts = attempt_counts[pid]
@@ -126,7 +169,7 @@ class OrgScanner:
 
             pending = failed_this_round
 
-        # Handle permanently failed projects
+        # ── Handle permanently failed projects ────────────────────────────
         if permanently_failed:
             console.print(
                 f"\n[bold red]{len(permanently_failed)}[/bold red] project(s) failed after "
@@ -151,14 +194,19 @@ class OrgScanner:
 
                     with ThreadPoolExecutor(max_workers=self.max_threads) as executor:
                         future_to_proj = {
-                            executor.submit(self._fetch_project_issues, org_id, proj): proj
+                            executor.submit(self._fetch_project_data, org_id, proj): proj
                             for proj in permanently_failed
                         }
                         for future in as_completed(future_to_proj):
                             proj = future_to_proj[future]
+                            pid = proj["id"]
                             try:
-                                result = future.result()
-                                results.append(result)
+                                scan_result, ignored_issues, ignores_map = future.result()
+                                results.append(scan_result)
+                                ignored_data[pid] = {
+                                    "ignored_issues": ignored_issues,
+                                    "ignores_map": ignores_map,
+                                }
                                 progress.update(task_id, advance=1,
                                                 status=f"[green]OK[/green] {proj['name'][:40]}")
                             except Exception:
@@ -176,5 +224,9 @@ class OrgScanner:
                     f"[dim]Skipping failed projects. Continuing with "
                     f"{len(results)} successful results.[/dim]"
                 )
+
+        # ── Persist ignored data to cache alongside scan results ──────────
+        if cache is not None and ignored_data:
+            cache.save_ignored_data(org_id, ignored_data)
 
         return results

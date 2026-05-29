@@ -113,7 +113,7 @@ def _extract_unique_vulns(results: list[dict]) -> list[dict]:
     for proj in results:
         for issue in proj.get("issues", []):
             issue_data = issue.get("issueData", {})
-            vuln_id = issue.get("id") or issue_data.get("id", "")
+            vuln_id = issue_data.get("id") or issue.get("id", "")
             if not vuln_id:
                 continue
 
@@ -406,13 +406,41 @@ def _save_project_snyk_file(folder: Path, policy: dict, vuln_metadata: dict) -> 
                         f.write(f"        created: {details['created']}\n")
 
 
-def _generate_per_project_ignores(results: list[dict]) -> None:
-    """Generate a .snyk file per project with default ignores.
+def _prompt_min_risk_score(prompt_text: str = "Minimum Snyk risk score (0–1000, default 0 = no threshold)") -> int:
+    """Ask the user for a minimum risk score threshold. Returns 0–1000."""
+    raw = Prompt.ask(prompt_text, default="0")
+    try:
+        val = int(raw)
+        if 0 <= val <= 1000:
+            return val
+        console.print("[yellow]Value out of range — using 0 (no threshold).[/yellow]")
+        return 0
+    except (ValueError, TypeError):
+        console.print("[yellow]Invalid input — using 0 (no threshold).[/yellow]")
+        return 0
 
-    Criteria: low/very low risk score (≤400), no reachability path found, and not fixable.
+
+def _generate_per_project_ignores(
+    results: list[dict],
+    filter_mode: str = "non_fixable",
+    min_risk_score: int = 0,
+) -> None:
+    """Generate a .snyk file per project under snyk-ignores/.
+
+    filter_mode options:
+        "all"                    – every vulnerability
+        "fixable"                – only fixable vulnerabilities
+        "non_fixable"            – only non-fixable vulnerabilities
+        "non_fixable_above_score"– non-fixable with risk score >= min_risk_score
     """
-    console.print("\n[bold cyan]Generating default .snyk ignores per project…[/bold cyan]")
-    console.print("[dim]Criteria: risk score ≤ 400, no reachability path, not fixable[/dim]\n")
+    mode_labels = {
+        "all": "all vulnerabilities",
+        "fixable": "fixable vulnerabilities",
+        "non_fixable": "non-fixable vulnerabilities",
+        "non_fixable_above_score": f"non-fixable vulnerabilities with risk score ≥ {min_risk_score}",
+    }
+    console.print(f"\n[bold cyan]Generating .snyk ignores per project…[/bold cyan]")
+    console.print(f"[dim]Criteria: {mode_labels.get(filter_mode, filter_mode)}[/dim]\n")
 
     projects_written = 0
     total_ignores = 0
@@ -431,25 +459,44 @@ def _generate_per_project_ignores(results: list[dict]) -> None:
             proj_ignore_count = 0
 
             for issue in issues:
-                vuln_id = issue.get("id") or issue.get("issueData", {}).get("id", "")
+                issue_data = issue.get("issueData", {})
+                vuln_id = issue_data.get("id") or issue.get("id", "")
                 if not vuln_id:
                     continue
 
-                if not _is_low_risk_score(issue):
-                    continue
-                if not _is_not_fixable(issue):
-                    continue
-
-                reachability = _get_reachability(issue)
-                if reachability.lower() not in ("no", "no data"):
-                    continue
-
-                issue_data = issue.get("issueData", {})
+                not_fixable = _is_not_fixable(issue)
                 priority = issue.get("priority", {})
                 score = priority.get("score")
-                days = _score_to_suggested_days(score, issue_data.get("severity", "medium"))
 
-                reason = f"Accepted due to low risk score of {score}" if score else "Accepted - low risk, no reachability path, not fixable"
+                # Apply filter
+                if filter_mode == "all":
+                    passes = True
+                elif filter_mode == "fixable":
+                    passes = not not_fixable
+                elif filter_mode == "non_fixable":
+                    passes = not_fixable
+                elif filter_mode == "non_fixable_above_score":
+                    if not not_fixable:
+                        passes = False
+                    elif score is None:
+                        passes = False
+                    else:
+                        try:
+                            passes = int(score) >= min_risk_score
+                        except (ValueError, TypeError):
+                            passes = False
+                else:
+                    passes = False
+
+                if not passes:
+                    continue
+
+                days = _score_to_suggested_days(score, issue_data.get("severity", "medium"))
+                reason = (
+                    f"Accepted due to risk score of {score}"
+                    if score is not None
+                    else "Accepted - not fixable"
+                )
                 expires = (datetime.utcnow() + timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
                 entry = {
@@ -461,6 +508,7 @@ def _generate_per_project_ignores(results: list[dict]) -> None:
                 }
 
                 policy["ignore"][vuln_id] = [entry]
+                reachability = _get_reachability(issue)
                 vuln_metadata[vuln_id] = {
                     "id": vuln_id,
                     "title": issue_data.get("title", vuln_id),
@@ -468,7 +516,7 @@ def _generate_per_project_ignores(results: list[dict]) -> None:
                     "risk_score": score,
                     "cwe": issue_data.get("identifiers", {}).get("CWE", []),
                     "reachability": reachability,
-                    "fixable": False,
+                    "fixable": not not_fixable,
                 }
                 proj_ignore_count += 1
 
@@ -494,15 +542,21 @@ def _generate_per_project_ignores(results: list[dict]) -> None:
         console.print("\n[yellow]No vulnerabilities matched the criteria for any project.[/yellow]")
 
 
-def _update_allowed_ignored(results: list[dict], client=None, org: dict | None = None, require_high_risk: bool = True) -> None:
+def _update_allowed_ignored(
+    results: list[dict],
+    client=None,
+    org: dict | None = None,
+    min_risk_score: int = 0,
+    cache=None,
+) -> None:
     """Ignore non-fixable vulns via the Snyk API.
 
-    When require_high_risk=True: ignores non-fixable vulns with risk score >= 400.
-    When require_high_risk=False: ignores all non-fixable vulns regardless of risk score.
+    min_risk_score=0  → all non-fixable vulns qualify (no score threshold).
+    min_risk_score>0  → only non-fixable vulns with risk score >= min_risk_score qualify.
 
-    Shows the user a list of what will be ignored/updated/unignored, then
-    connects to Snyk to apply the changes after confirmation.
-    Each vuln+project combination is treated individually (not grouped).
+    Shows the user a summary table of what will be ignored/updated/unignored, then
+    calls the Snyk API after confirmation.
+    Each vuln+project combination is treated individually.
     """
     from rich.table import Table
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -514,23 +568,22 @@ def _update_allowed_ignored(results: list[dict], client=None, org: dict | None =
 
     org_id = org["id"]
 
-    if require_high_risk:
-        console.print("\n[bold cyan]Ignore - NonFixable + Risk 400[/bold cyan]")
-        console.print("[dim]Criteria: risk score >= 400 AND no fix available[/dim]")
+    if min_risk_score > 0:
+        console.print(f"\n[bold cyan]Ignore Non-Fixable (risk score ≥ {min_risk_score})[/bold cyan]")
+        console.print(f"[dim]Criteria: no fix available AND risk score ≥ {min_risk_score}[/dim]")
     else:
         console.print("\n[bold cyan]Ignore All Non-Fixable[/bold cyan]")
         console.print("[dim]Criteria: no fix available (any risk score)[/dim]")
     console.print("[dim]Action: ignore temporarily for 90 days or until fix is available[/dim]\n")
 
     # Build a flat list of (vuln, project) entries — no deduplication across projects
-    # Each entry represents one vuln in one specific project/manifest
     entries: list[dict] = []
     for proj in results:
         project_id = proj.get("id", "")
         project_name = proj.get("name", "Unknown")
         for issue in proj.get("issues", []):
             issue_data = issue.get("issueData", {})
-            vuln_id = issue.get("id") or issue_data.get("id", "")
+            vuln_id = issue_data.get("id") or issue.get("id", "")
             if not vuln_id:
                 continue
 
@@ -562,18 +615,16 @@ def _update_allowed_ignored(results: list[dict], client=None, org: dict | None =
         score = entry["risk_score"]
         fixable = entry["fixable"]
 
-        # Determine if this entry qualifies for ignoring based on mode
-        if require_high_risk:
-            # Mode 1: Non-fixable AND risk score >= 400
+        # Determine if this entry qualifies for ignoring
+        if min_risk_score > 0:
             score_qualifies = False
             if score is not None:
                 try:
-                    score_qualifies = int(score) >= 400
+                    score_qualifies = int(score) >= min_risk_score
                 except (ValueError, TypeError):
                     pass
-            qualifies = score_qualifies and not fixable
+            qualifies = not fixable and score_qualifies
         else:
-            # Mode 2: All non-fixable (regardless of risk score)
             qualifies = not fixable
 
         already_ignored = entry["vuln_id"] in existing_ignores
@@ -599,8 +650,7 @@ def _update_allowed_ignored(results: list[dict], client=None, org: dict | None =
         table.add_column("Title", max_width=45)
         table.add_column("Score", justify="right")
         table.add_column("Severity")
-        sorted_ignore = sorted(to_ignore, key=lambda e: (e["display_path"], -(e["risk_score"] or 0)))
-        for e in sorted_ignore:
+        for e in sorted(to_ignore, key=lambda e: (e["display_path"], -(e["risk_score"] or 0))):
             table.add_row(e["display_path"], e["vuln_id"], e["title"][:45],
                           str(e["risk_score"]), e["severity"])
         console.print(table)
@@ -614,8 +664,7 @@ def _update_allowed_ignored(results: list[dict], client=None, org: dict | None =
         table.add_column("Score", justify="right")
         table.add_column("Severity")
         table.add_column("Fixable?")
-        sorted_update = sorted(to_update, key=lambda e: (e["display_path"], -(e["risk_score"] or 0)))
-        for e in sorted_update:
+        for e in sorted(to_update, key=lambda e: (e["display_path"], -(e["risk_score"] or 0))):
             fixable_str = "[green]Yes[/green]" if e["fixable"] else "[red]No[/red]"
             table.add_row(e["display_path"], e["vuln_id"], e["title"][:45],
                           str(e["risk_score"]), e["severity"], fixable_str)
@@ -629,8 +678,7 @@ def _update_allowed_ignored(results: list[dict], client=None, org: dict | None =
         table.add_column("Title", max_width=45)
         table.add_column("Score", justify="right")
         table.add_column("Severity")
-        sorted_unignore = sorted(to_unignore, key=lambda e: (e["display_path"], -(e["risk_score"] or 0)))
-        for e in sorted_unignore:
+        for e in sorted(to_unignore, key=lambda e: (e["display_path"], -(e["risk_score"] or 0))):
             table.add_row(e["display_path"], e["vuln_id"], e["title"][:45],
                           str(e["risk_score"]), e["severity"])
         console.print(table)
@@ -644,13 +692,13 @@ def _update_allowed_ignored(results: list[dict], client=None, org: dict | None =
         return
 
     # Apply changes via Snyk API
-    if require_high_risk:
-        reason = "No known fix available, risk score >= 400."
-    else:
-        reason = "No known fix available."
+    reason = (
+        f"No known fix available, risk score >= {min_risk_score}."
+        if min_risk_score > 0
+        else "No known fix available."
+    )
     expires = (datetime.utcnow() + timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
-    # Build list of API calls: (action, vuln_id, project_id)
     api_calls: list[tuple[str, str, str]] = []
     for e in to_ignore + to_update:
         api_calls.append(("ignore", e["vuln_id"], e["project_id"]))
@@ -694,110 +742,69 @@ def _update_allowed_ignored(results: list[dict], client=None, org: dict | None =
     if errors:
         console.print("[yellow]Some operations failed — check errors above.[/yellow]")
 
+    # Bust the ignored-issues cache so the next report run re-fetches fresh data
+    if cache is not None and success > 0:
+        cache.delete_ignored_data(org_id)
+        console.print("[dim]Ignored-issues cache cleared — next report will fetch fresh data.[/dim]")
 
-def manage_ignores(results: list[dict], client=None, org: dict | None = None) -> None:
-    """Interactive workflow to review vulnerabilities and add ignores to .snyk."""
 
-    # Top-level choice: per-unique-vuln or per-project defaults
-    console.print("\n[bold cyan]Manage SNYK Ignores[/bold cyan]")
-    console.print("  [cyan]1[/cyan] - [API] Ignore - NonFixable + Risk 400")
-    console.print("  [cyan]2[/cyan] - [API] Ignore All Non-Fixable")
-    console.print("  [cyan]3[/cyan] - [.snyk] Generate default ignores for all projects")
-    console.print("  [cyan]4[/cyan] - [.snyk] Fixable vulnerabilities only")
-    console.print("  [cyan]5[/cyan] - [.snyk] Non-fixable vulnerabilities only")
-    console.print("  [cyan]6[/cyan] - [.snyk] All vulnerabilities")
-    console.print("  [cyan]7[/cyan] - Previous menu")
+def _snyk_file_workflow(results: list[dict]) -> None:
+    """Interactive sub-workflow for generating local .snyk ignore files."""
+    console.print("\n[bold cyan]Generate Local .snyk Ignore Files[/bold cyan]")
+    console.print("  [cyan]1[/cyan] - All vulnerabilities")
+    console.print("  [cyan]2[/cyan] - All non-fixable vulnerabilities")
+    console.print("  [cyan]3[/cyan] - Non-fixable vulnerabilities above a risk score")
+    console.print("  [cyan]4[/cyan] - Fixable vulnerabilities only")
+    console.print("  [cyan]5[/cyan] - Cancel")
     console.print()
 
-    top_choice = Prompt.ask("Choose an option (1) ")
-    if not top_choice:
-        top_choice = "1"
+    choice = Prompt.ask("Choose an option", default="1")
 
-    if top_choice == "7":
+    if choice == "5" or not choice:
         return
 
-    if top_choice == "1":
-        _update_allowed_ignored(results, client=client, org=org, require_high_risk=True)
-        return
+    if choice == "1":
+        _generate_per_project_ignores(results, filter_mode="all")
 
-    if top_choice == "2":
-        _update_allowed_ignored(results, client=client, org=org, require_high_risk=False)
-        return
+    elif choice == "2":
+        _generate_per_project_ignores(results, filter_mode="non_fixable")
 
-    if top_choice == "3":
-        _generate_per_project_ignores(results)
-        return
+    elif choice == "3":
+        min_score = _prompt_min_risk_score()
+        _generate_per_project_ignores(results, filter_mode="non_fixable_above_score",
+                                      min_risk_score=min_score)
 
-    all_vulns = _extract_unique_vulns(results)
+    elif choice == "4":
+        _generate_per_project_ignores(results, filter_mode="fixable")
 
-    if not all_vulns:
-        console.print("[green]No vulnerabilities found to ignore.[/green]")
-        return
-
-    if top_choice == "4":
-        vulns = [v for v in all_vulns if v["fixable"]]
-        label = "fixable"
-    elif top_choice == "5":
-        vulns = [v for v in all_vulns if not v["fixable"]]
-        label = "non-fixable"
     else:
-        vulns = all_vulns
-        label = "all"
+        console.print("[yellow]Unknown option — returning.[/yellow]")
 
-    if not vulns:
-        console.print(f"[yellow]No {label} vulnerabilities found.[/yellow]")
-        return
 
-    console.print(f"\n[bold]{len(vulns)} {label} unique vulnerability(ies) to review.[/bold]\n")
+def manage_ignores(results: list[dict], client=None, org: dict | None = None, cache=None) -> None:
+    """Interactive workflow to review vulnerabilities and add ignores."""
 
-    # Ask review mode
-    console.print("[bold cyan]How would you like to proceed?[/bold cyan]")
-    console.print("  [cyan]1[/cyan] - Review each vulnerability one by one")
-    console.print("  [cyan]2[/cyan] - Accept all suggested ignores (auto-ignore based on risk score)")
+    console.print("\n[bold cyan]Manage SNYK Ignores[/bold cyan]")
+    console.print("  [cyan]1[/cyan] - [API] Ignore Non-Fixable")
+    console.print("  [cyan]2[/cyan] - [.snyk] Generate local ignore files")
     console.print("  [cyan]3[/cyan] - Previous menu")
     console.print()
 
-    mode_choice = Prompt.ask("Choose (1) ")
-    if not mode_choice:
-        mode_choice = "1"
+    top_choice = Prompt.ask("Choose an option", default="1")
 
-    if mode_choice == "3":
+    if top_choice == "3":
         return
 
-    # Load existing policy
-    policy = _load_snyk_policy()
-    vuln_metadata: dict[str, dict] = {}
-    added_count = 0
-    skipped = 0
+    # ── Option 1: API ignore non-fixable with optional risk score threshold ──
+    if top_choice == "1":
+        min_score = _prompt_min_risk_score(
+            "Minimum risk score to include (0–1000, default 0 = all non-fixable)"
+        )
+        _update_allowed_ignored(results, client=client, org=org,
+                                min_risk_score=min_score, cache=cache)
+        return
 
-    try:
-        if mode_choice == "2":
-            # Auto-ignore everything with a risk score
-            with_score = [v for v in vulns if _has_risk_score(v)]
-            without_score = [v for v in vulns if not _has_risk_score(v)]
-
-            if with_score:
-                console.print(f"\n[bold green]Auto-ignoring {len(with_score)} vulnerability(ies) with risk scores…[/bold green]\n")
-                added_count = _auto_ignore_vulns(with_score, policy, vuln_metadata)
-
-            # Vulns without a score must be reviewed manually
-            if without_score:
-                console.print(
-                    f"\n[bold yellow]{len(without_score)} vulnerability(ies) have no risk score "
-                    f"and require manual review:[/bold yellow]"
-                )
-                manual_added, skipped = _review_vulns_one_by_one(without_score, policy, vuln_metadata)
-                added_count += manual_added
-
-        else:
-            # Review all one by one
-            added_count, skipped = _review_vulns_one_by_one(vulns, policy, vuln_metadata)
-
-    except KeyboardInterrupt:
-        console.print("\n\n[yellow]Interrupted — saving any ignores added so far.[/yellow]")
-
-    if added_count > 0:
-        _save_snyk_policy(policy, vuln_metadata)
-        console.print(f"\n[bold]Results:[/bold] {added_count} ignored, {skipped} skipped")
-    else:
-        console.print("\n[dim]No ignores added.[/dim]")
+    # ── Option 2: .snyk file generation sub-workflow ──
+    if top_choice == "2":
+        _snyk_file_workflow(results)
+        return

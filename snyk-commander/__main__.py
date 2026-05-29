@@ -114,7 +114,7 @@ def main():
     client = SnykClient(token)
     cache = CacheManager()
     scanner = OrgScanner(client)
-    menu = OptionsMenu(client)
+    menu = OptionsMenu(client, cache=cache)
 
     # Verify token
     with console.status("[bold]Verifying token…[/bold]"):
@@ -173,7 +173,7 @@ def main():
                 sys.exit(1)
 
         for org in selected_orgs:
-            results = scanner.scan(org)
+            results = scanner.scan(org, cache=cache)
             if not results:
                 continue
             cache.save(org, results)
@@ -194,7 +194,7 @@ def _show_and_menu(org, results, scanner, cache, menu) -> str:
     action = menu.show(org, results)
     if action == "rescan":
         cache.delete(org["id"])
-        results = scanner.scan(org)
+        results = scanner.scan(org, cache=cache)
         if results:
             cache.save(org, results)
             return _show_and_menu(org, results, scanner, cache, menu)
