@@ -6,6 +6,7 @@ from .config import console
 from .api import SnykClient
 from .report import display_results, generate_report
 from .ignore import manage_ignores
+from .fix_pr import FixPRManager
 
 
 def _report_submenu(org: dict, results: list, client: SnykClient, cache=None) -> None:
@@ -68,9 +69,10 @@ class OptionsMenu:
             console.print("[bold cyan]╚══════════════════════════════════╝[/bold cyan]\n")
             console.print("  [cyan]1[/cyan] - View Vulnerability Summary")
             console.print("  [cyan]2[/cyan] - Manage Ignores")
-            console.print("  [cyan]3[/cyan] - Generate report")
-            console.print("  [cyan]4[/cyan] - Rescan Org")
-            console.print("  [cyan]5[/cyan] - Exit")
+            console.print("  [cyan]3[/cyan] - Trigger Fix PRs")
+            console.print("  [cyan]4[/cyan] - Generate report")
+            console.print("  [cyan]5[/cyan] - Rescan Org")
+            console.print("  [cyan]6[/cyan] - Exit")
             console.print()
 
             choice = Prompt.ask("Choose an option", default="1")
@@ -86,10 +88,14 @@ class OptionsMenu:
                 manage_ignores(results, client=self.client, org=org, cache=self.cache)
 
             elif choice == "3":
-                _report_submenu(org, results, self.client, cache=self.cache)
+                fixer = FixPRManager(self.client.token)
+                fixer.handle_fix_prs(org["id"], org["slug"], results)
 
             elif choice == "4":
-                return "rescan"
+                _report_submenu(org, results, self.client, cache=self.cache)
 
             elif choice == "5":
+                return "rescan"
+
+            elif choice == "6":
                 return "exit"
