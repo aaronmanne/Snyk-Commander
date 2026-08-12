@@ -1,0 +1,57 @@
+{
+  "name": "snyk-commander",
+  "version": "3.0.0",
+  "description": "Snyk Commander - GUI vulnerability management",
+  "main": "electron/main.js",
+  "scripts": {
+    "setup": "npm install --include=dev && npm run setup:renderer",
+    "setup:renderer": "cd renderer && npm install --include=dev",
+    "build:backend": "npx esbuild src/backend/index.ts --bundle --platform=node --target=node18 --outfile=dist/backend/index.js --external:electron --minify",
+    "build:renderer": "cd renderer && npx vite build",
+    "build": "npm run build:backend && npm run build:renderer",
+    "start": "NODE_ENV=production npx electron .",
+    "dev:backend": "npx esbuild src/backend/index.ts --bundle --platform=node --target=node18 --outfile=dist/backend/index.js --external:electron --watch",
+    "dev:renderer": "cd renderer && npx vite",
+    "dev": "npx concurrently -n BACKEND,RENDERER,ELECTRON -c cyan,magenta,yellow \"npm run dev:backend\" \"npm run dev:renderer\" \"npx wait-on file:dist/backend/index.js http://localhost:5173 && NODE_ENV=development npx electron .\"",
+    "dist": "npm run build && npx electron-builder",
+    "pack": "npm run build && npx electron-builder --dir"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.0.0",
+    "concurrently": "^9.0.0",
+    "electron": "^32.0.0",
+    "electron-builder": "^25.0.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0",
+    "wait-on": "^8.0.0"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0"
+  },
+  "build": {
+    "appId": "com.snykcommander.app",
+    "productName": "Snyk Commander",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "electron/**/*",
+      "dist/backend/**/*",
+      "renderer/dist/**/*"
+    ],
+    "mac": {
+      "target": "dmg"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": "AppImage"
+    }
+  },
+  "allowScripts": {
+    "electron@32.3.3": true,
+    "esbuild@0.24.2": true
+  }
+}

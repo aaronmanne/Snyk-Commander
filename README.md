@@ -1,99 +1,299 @@
-# Snyk Commander
+# Snyk Commander v3.0
 
-Scan all Snyk projects in your organization for vulnerabilities and interactively open fix PRs.
-
-## Setup
-
-```bash
-pip install -r requirements.txt
-export SNYK_TOKEN=<your-snyk-pat-or-service-account-token>
-```
-
-## Usage
-
-```bash
-python -m snyk-commander
-```
-
-The tool will:
-
-1. Authenticate with the Snyk API using your token
-2. List your organizations and let you pick one (or scan all)
-3. Iterate through every project, fetching vulnerability data
-4. Display a summary table with severity counts and fix PR availability
-5. Ask whether you want to:
-   - **Open fix PRs for ALL** fixable projects at once, or
-   - **Review each project** one-by-one and decide individually
-
-## Authentication
-
-Set `SNYK_TOKEN` to either:
-- A **Personal Access Token (PAT)** from [Snyk Account Settings](https://app.snyk.io/account)
-- A **Service Account Token** for CI/automation
-
-# Snyk Commander: Project Purpose & Time-Saving Analysis
-
-## What Does Snyk Commander Aim to Solve?
-
-Snyk Commander is designed to streamline security vulnerability management at scale within organizations that use [Snyk](https://snyk.io) for code, dependency, and container scanning. Specifically, it solves for:
-
-- **Bulk visibility, triage, and remediation** of vulnerabilities across all Snyk projects in an organization.
-- **Efficient workflow for mass-fixing**: Triggering fix PRs (Pull Requests) en masse or selectively, reducing repetitive manual work via the Snyk UI.
-- **Automated and comprehensive reporting** on vulnerabilities for audit, compliance, and tracking.
-- **Handling scale and interruptions**: With robust error handling, retriable scanning, and session caching.
-
-## Key Features
-
-- **Organization and Project Scanning**: Authenticates to Snyk, lists organizations, scans all associated projects for vulnerabilities concurrently and robustly.
-- **Fix PR Automation**: (In progress) Automates the opening of fix PRs via browser automation, mimicking what a user would do manually in the Snyk UI.
-- **Interactive Triage**: Lets users review all fixable projects and either open all fix PRs at once or do it one-by-one.
-- **Reporting**: Exports detailed vulnerability data in Markdown and CSV for compliance, tracking, and transparency.
-- **Caching and Resume**: Caches scan results to allow for fast re-scanning or to resume interrupted sessions.
-- **Interactive CLI**: Presents users with action menus after scans for simplified workflow navigation.
-- **Resiliency**: Graceful retries, concurrency, and error handling to accommodate large orgs and flaky cloud infra.
-
-## How Snyk Commander Saves Time
-
-### For Security Engineers:
-- **Unified Visibility**: One command to see all vulnerabilities org-wide, not one project at a time.
-- **Automated Reporting**: Instantly generates compliance-grade reports instead of manual data collation.
-- **Batch Remediation**: Fix PRs can be opened in bulk with minimal input, dramatically speeding up orchestrated cleanups.
-- **Session Resumption & Caching**: Saves time on repeat scans or if work is interrupted by errors, meetings, or context switches.
-- **Error Mitigation**: Handles network/API errors for you, reducing babysitting.
-
-### For DevOps Engineers:
-- **Scale-Friendly**: Concurrency ensures that scanning hundreds or thousands of projects doesn’t take all day.
-- **Automation Hooks**: Can be integrated into CI/CD pipelines to automate reporting or even PR opening after Snyk scans.
-- **No Manual UI Navigation**: Eliminates the need for browser tab-hopping to inspect or fix issues across projects.
-
-### For Software Developers:
-- **Self-Service Security**: Developers can use the tool to get actionable vulnerability summaries and even trigger their own fix PRs.
-- **Interactive Guidance**: CLI menus ease navigation through large project lists, suggesting fixes and showing what is fixable at-a-glance.
-- **Fast Feedback Loop**: Developers can get an up-to-date, org-wide security status without waiting for security teams.
+A full-featured **Electron + React desktop app** for managing Snyk vulnerabilities at scale — built entirely in **TypeScript and Node.js**. No Python. No external runtimes.
 
 ---
 
-## Summary Table
+## Architecture
 
-| Stakeholder       | Pain Points Snyk Commander Solves                         | Time Savings Mechanism                |
-|-------------------|----------------------------------------------------------|---------------------------------------|
-| Security Engineer | Manual reporting, fixing many projects, error-prone UI   | Org-wide scan/report/auto-fix PRs     |
-| DevOps Engineer   | Scale, CI integration, error handling, UI friction       | Bulk scan, automation, resilience     |
-| Developer         | Unaware of status, slow fixes, UI overhead, context loss | Fast CLI feedback, guided fix actions |
+```
+┌─────────────────────────────────────────────────┐
+│                  Electron App                    │
+│                                                 │
+│  ┌──────────────────────┐  ┌──────────────────┐ │
+│  │  Renderer Process    │  │  Main Process    │ │
+│  │                      │  │                  │ │
+│  │  React 18            │◄─►  electron/       │ │
+│  │  TypeScript          │  │  main.js         │ │
+│  │  Vite 6              │  │                  │ │
+│  │  Tailwind CSS 3      │  │  TypeScript      │ │
+│  └──────────────────────┘  │  Backend         │ │
+│     contextBridge IPC      │  dist/backend/   │ │
+│                            │  index.js        │ │
+│                            └──────────────────┘ │
+└─────────────────────────────────────────────────┘
+         │
+         ▼
+   https://api.snyk.io  /  http://localhost:11434 (Ollama, optional)
+```
+
+**No Python. No subprocess. No IPC bridge.**
+The TypeScript backend runs directly in the Electron main process.
 
 ---
 
-## Functionality
+## Prerequisites
 
-Snyk Commander provides the following features:
+| Requirement | Version | Notes |
+|---|---|---|
+| **Node.js** | v18+ (v20+ recommended) | [nodejs.org](https://nodejs.org) |
+| **npm** | v8+ | Comes with Node |
+| **Snyk API token** | — | [app.snyk.io/account](https://app.snyk.io/account) |
+| **Ollama** _(optional)_ | any | For AI reachability analysis |
 
-- **Authentication**: Supports Snyk Personal Access Token (PAT) or Service Account Token via the `SNYK_TOKEN` environment variable or prompt.
-- **Organization Selection**: Lists all Snyk organizations accessible to your token and allows you to select one or scan all.
-- **Project Scanning**: Iterates through every project in the selected organization(s), fetching vulnerability data using the Snyk API with robust retry and concurrency logic.
-- **Vulnerability Summary**: Displays a detailed summary table of vulnerabilities per project, including severity counts, risk scores, and fix availability.
-- **Fix PR Automation**: [**PLANNED**] Lets you trigger fix pull requests (PRs) for all fixable projects at once, or review and trigger them individually. This is done via an automated browser session (Playwright) that mimics the Snyk UI.
-- **Reporting**: Generates Markdown and CSV reports listing all vulnerabilities, with details such as severity, risk score, and fix status. Reports are saved in the `reports/` directory.
-- **Caching**: Caches scan results to speed up repeated runs and allows resuming from previous scans.
-- **Interactive Options Menu**: After scanning, provides an interactive menu to view summaries, generate reports, trigger fix PRs, or rescan the organization.
-- **Robust Error Handling**: Handles API rate limits, network errors, and failed scans with retries and user prompts.
+> **Note for npm v11+ users:** npm v11 requires `--include=dev` to install devDependencies and uses a new `allowScripts` security model that blocks install scripts (electron, esbuild) until approved. The `setup.sh` script handles all of this automatically.
 
+---
+
+## Quick Start — Run `setup.sh` (recommended)
+
+```bash
+git clone <repo-url>
+cd Snyk-Commander
+./setup.sh
+```
+
+Then launch:
+
+```bash
+npm start
+```
+
+That's it. `setup.sh` handles:
+- Installing all root and renderer dependencies
+- Approving and running electron + esbuild install scripts
+- Extracting the Electron binary from cache if needed
+- Building the TypeScript backend (esbuild → `dist/backend/index.js`)
+- Building the React renderer (Vite → `renderer/dist/`)
+- Running an IPC smoke test to confirm everything works
+
+---
+
+## Manual Setup (step by step)
+
+If you prefer to run steps individually:
+
+### 1. Install root dependencies
+
+```bash
+npm install --include=dev
+```
+
+If on **npm v11**, approve the install scripts when prompted:
+
+```bash
+npm install-scripts approve electron
+npm install-scripts approve esbuild
+```
+
+If electron doesn't install correctly (common on Node 26 + Apple Silicon), run:
+
+```bash
+node node_modules/electron/install.js
+# If that fails, setup.sh handles the manual extraction — just run ./setup.sh
+```
+
+### 2. Install renderer dependencies
+
+```bash
+cd renderer
+npm install --include=dev
+npm install-scripts approve esbuild   # if on npm v11
+cd ..
+```
+
+### 3. Build
+
+```bash
+# Build TypeScript backend (~20ms via esbuild)
+npm run build:backend
+
+# Build React renderer (~3s via Vite)
+npm run build:renderer
+```
+
+Or build both at once:
+
+```bash
+npm run build
+```
+
+### 4. Launch
+
+```bash
+npm start
+```
+
+---
+
+## Development Mode
+
+Start all three services with hot-reload:
+
+```bash
+npm run dev
+```
+
+This runs concurrently:
+- **Backend watcher** — esbuild rebuilds `dist/backend/index.js` on save (~20ms)
+- **Renderer dev server** — Vite HMR at `http://localhost:5173`
+- **Electron** — loads from Vite dev server, opens DevTools
+
+Or run individually:
+
+```bash
+# Terminal 1
+npm run dev:backend
+
+# Terminal 2
+npm run dev:renderer
+
+# Terminal 3 (after the above are running)
+NODE_ENV=development npx electron .
+```
+
+---
+
+## All npm Scripts
+
+| Script | What it does |
+|---|---|
+| `npm run build` | Build backend + renderer |
+| `npm run build:backend` | Compile TypeScript → `dist/backend/index.js` (esbuild) |
+| `npm run build:renderer` | Compile React → `renderer/dist/` (Vite) |
+| `npm start` | Launch in production mode |
+| `npm run dev` | Launch everything with hot-reload |
+| `npm run dev:backend` | Watch-mode backend build |
+| `npm run dev:renderer` | Vite dev server |
+| `npm run dist` | Build + package with electron-builder |
+| `npm run pack` | Build + package without installer (faster) |
+
+---
+
+## Project Structure
+
+```
+Snyk-Commander/
+├── setup.sh               ← One-command setup script (run this first)
+│
+├── electron/
+│   ├── main.js            ← Electron main process — window, IPC, CSP, native dialogs
+│   └── preload.js         ← contextBridge — exposes window.snykAPI to renderer
+│
+├── src/
+│   └── backend/           ← TypeScript backend (compiled to dist/backend/)
+│       ├── index.ts        ← IPC router — invoke() + stream() entry points
+│       ├── snykApi.ts      ← Snyk REST + v1 API client (native fetch, semaphore, retry)
+│       ├── cache.ts        ← JSON file cache management
+│       ├── auth.ts         ← Token verification, org listing, cache summary
+│       ├── scanner.ts      ← Org scanning (30 parallel project fetches)
+│       ├── ignores.ts      ← Ignore analysis, Snyk API apply, .snyk file generation
+│       ├── fixPr.ts        ← Fix PR triggering via Snyk HTTP endpoint
+│       ├── report.ts       ← Markdown + CSV report generation
+│       ├── reachability.ts ← Static codebase analysis + Ollama LLM integration
+│       └── cache_handler.ts
+│
+├── renderer/              ← React + TypeScript frontend
+│   ├── src/
+│   │   ├── views/          ← 10 application views
+│   │   ├── components/     ← Reusable UI components
+│   │   ├── context/        ← Global app state (AppContext)
+│   │   ├── api.ts          ← Typed window.snykAPI wrapper
+│   │   └── types.ts        ← TypeScript interfaces
+│   └── dist/               ← Built output (loaded by Electron in production)
+│
+├── dist/
+│   └── backend/
+│       └── index.js        ← Bundled backend (esbuild output, ~72 KB)
+│
+├── .snyk_cache/            ← Scan result cache (auto-created, gitignored)
+├── reports/                ← Generated vulnerability reports (gitignored)
+└── snyk-ignores/           ← Generated .snyk policy files (gitignored)
+```
+
+---
+
+## Features
+
+### 🔐 Authentication
+- Enter Snyk API token in the GUI — "Remember token" persists across sessions
+- Resume from cached scan results with one click
+
+### 📊 Dashboard
+- Org-wide stats: total vulns, critical count, fixable count, projects scanned
+- SVG donut chart (no external chart library)
+- Top 10 most vulnerable projects
+- One-click rescan
+
+### 🔍 Vulnerability Browser
+- Filterable (severity, fixability, keyword), sortable, paginated table
+- Expandable rows: full CVSS, CWE, affected versions, fix path
+- "Run Reachability Analysis" button on every row
+
+### 🚫 Ignore Manager
+**API Ignores** — risk score slider → preview (ignore/update/unignore) → apply via Snyk API with streaming progress  
+**Generate .snyk Files** — write per-project policy files to `snyk-ignores/`
+
+### 🔧 Fix PRs
+Trigger fix PRs per-project or in bulk via Snyk's HTTP endpoint
+
+### 📋 Reports
+Generate Markdown + CSV reports in three modes: All / Non-fixable / Non-fixable above score
+
+### 🔬 Reachability Analysis
+**"Is this vulnerable package actually called in my code?"**
+1. Select a vulnerability → choose your codebase directory
+2. Scans imports, require statements, and function calls across Python, JS/TS, Java, Go, Ruby, PHP, C#
+3. Optional: local Ollama LLM reasoning (default model: `llama3`)
+4. Verdict: **LIKELY REACHABLE** 🔴 / **LIKELY NOT REACHABLE** 🟢 / **INCONCLUSIVE** 🟡
+
+---
+
+## Tech Stack
+
+| Layer | Technology | Version |
+|---|---|---|
+| Desktop shell | Electron | 32 |
+| Frontend framework | React | 18 |
+| Frontend language | TypeScript | 5.6 |
+| Frontend build | Vite | 6 |
+| Styling | Tailwind CSS | 3 |
+| Icons | Lucide React | — |
+| Backend language | TypeScript | 5.6 |
+| Backend bundler | esbuild | 0.24 |
+| HTTP client | Native `fetch` | Node 18 built-in |
+| YAML | js-yaml | 4 |
+| Snyk API | REST v1 + REST 2024-10-15 | — |
+| AI analysis | Ollama (local, optional) | any |
+
+---
+
+## Troubleshooting
+
+### `sh: esbuild: command not found` / `sh: tsc: command not found`
+npm scripts must use `npx` to run local binaries. All scripts in this repo already use `npx`. If you see this error, make sure you're using the scripts from this repo and not manually typing the command without `npx`.
+
+### Electron fails to install / `path.txt missing`
+This happens on Node 26 + npm 11 (Apple Silicon especially). Run `./setup.sh` — it handles the manual binary extraction automatically.
+
+### `npm install` shows "up to date, audited 1 package"
+On npm v11, devDependencies are not installed by default. Always use:
+```bash
+npm install --include=dev
+```
+
+### `allow-scripts` warnings
+npm v11 requires explicit approval for packages with install scripts. Run:
+```bash
+npm install-scripts approve electron
+npm install-scripts approve esbuild
+```
+Or use `./setup.sh` which does this automatically.
+
+### Blank white window / renderer not loading
+The renderer must be built before launching in production mode:
+```bash
+npm run build
+npm start
+```
+For dev mode with hot-reload use `npm run dev` instead.
