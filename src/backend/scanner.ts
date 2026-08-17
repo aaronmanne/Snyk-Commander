@@ -53,6 +53,28 @@ function isFixable(issues: unknown[]): boolean {
   });
 }
 
+function issueVulnId(issue: unknown): string {
+  const iss = issue as Record<string, unknown>;
+  const issueData = (iss['issueData'] as Record<string, unknown>) ?? {};
+  return (issueData['id'] as string) || (iss['id'] as string) || '';
+}
+
+/**
+ * Defensively remove any issue from the "active" list that also appears in the
+ * "ignored" list. Snyk's aggregated-issues `ignored: false` filter should already
+ * exclude ignored issues, but we've observed cases where recently-ignored issues
+ * still show up in the active list for a short time (propagation delay) or when
+ * the filter isn't fully honoured. Cross-referencing against the explicit ignored
+ * list guarantees our UI never shows a vulnerability as "active" that Snyk
+ * considers ignored.
+ */
+function excludeIgnored(issues: unknown[], ignored: unknown[]): unknown[] {
+  if (ignored.length === 0) return issues;
+  const ignoredIds = new Set(ignored.map(issueVulnId).filter(Boolean));
+  if (ignoredIds.size === 0) return issues;
+  return issues.filter((i) => !ignoredIds.has(issueVulnId(i)));
+}
+
 function countSeverity(issues: unknown[]): { critical: number; high: number; medium: number; low: number } {
   const sev = { critical: 0, high: 0, medium: 0, low: 0 };
   for (const issue of issues) {
@@ -62,6 +84,7 @@ function countSeverity(issues: unknown[]): { critical: number; high: number; med
   }
   return sev;
 }
+
 
 // ---------------------------------------------------------------------------
 // Main scan function
@@ -147,9 +170,13 @@ export async function scanOrg(
           client.getProjectIgnores(org.id, proj.id),
         ]);
 
-        const issues       = issuesResult.status       === 'fulfilled' ? issuesResult.value       : [];
+        const issuesRaw    = issuesResult.status       === 'fulfilled' ? issuesResult.value       : [];
         const ignored      = ignoredResult.status      === 'fulfilled' ? ignoredResult.value      : [];
         const ignoresMap   = ignoresMapResult.status   === 'fulfilled' ? ignoresMapResult.value   : {};
+
+        // Defensive cross-filter: never show an issue as "active" if Snyk's
+        // ignored-issues list also reports it as ignored (see excludeIgnored doc).
+        const issues = excludeIgnored(issuesRaw, ignored);
 
         const sev     = countSeverity(issues);
         const fixable = isFixable(issues);

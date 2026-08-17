@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="38%" r="75%">
+      <stop offset="0%" stop-color="#1a0000"/>
+      <stop offset="55%" stop-color="#0a0a0d"/>
+      <stop offset="100%" stop-color="#000000"/>
+    </radialGradient>
+    <linearGradient id="shieldGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#2a2f36"/>
+      <stop offset="55%" stop-color="#14171c"/>
+      <stop offset="100%" stop-color="#05070a"/>
+    </linearGradient>
+    <linearGradient id="edgeGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ff2e2e"/>
+      <stop offset="100%" stop-color="#8a0000"/>
+    </linearGradient>
+    <radialGradient id="eyeGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ff5a5a"/>
+      <stop offset="45%" stop-color="#ff1414"/>
+      <stop offset="100%" stop-color="#5a0000" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="softGlow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="18" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <clipPath id="shieldClip">
+      <path d="M512 90 L840 200 C840 430 800 660 512 934 C224 660 184 430 184 200 Z"/>
+    </clipPath>
+  </defs>
+
+  <!-- background -->
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+
+  <!-- faint circuit grid -->
+  <g stroke="#3a4048" stroke-width="3" opacity="0.35">
+    <path d="M80 300 H300 V180 H460" fill="none"/>
+    <path d="M944 340 H760 V500 H600" fill="none"/>
+    <path d="M120 760 H320 V860" fill="none"/>
+    <path d="M900 760 H700 V880 H560" fill="none"/>
+    <path d="M512 60 V150" fill="none"/>
+    <path d="M512 960 V890" fill="none"/>
+  </g>
+  <g fill="#3a4048" opacity="0.45">
+    <circle cx="300" cy="180" r="6"/>
+    <circle cx="460" cy="180" r="6"/>
+    <circle cx="760" cy="500" r="6"/>
+    <circle cx="320" cy="860" r="6"/>
+    <circle cx="560" cy="880" r="6"/>
+  </g>
+
+  <!-- shield body -->
+  <path d="M512 90 L840 200 C840 430 800 660 512 934 C224 660 184 430 184 200 Z"
+        fill="url(#shieldGrad)" stroke="url(#edgeGrad)" stroke-width="14"/>
+
+  <!-- inner beveled edge -->
+  <path d="M512 132 L800 228 C800 434 764 640 512 884 C260 640 224 434 224 228 Z"
+        fill="none" stroke="#ff3b3b" stroke-width="3" opacity="0.5"/>
+
+  <g clip-path="url(#shieldClip)">
+    <!-- jagged crack / fracture lines radiating like an aggressive strike -->
+    <g stroke="#ff2b2b" stroke-width="7" fill="none" filter="url(#softGlow)" opacity="0.9">
+      <path d="M512 470 L430 360 L470 330 L400 220"/>
+      <path d="M512 470 L620 350 L580 300 L650 200"/>
+      <path d="M512 470 L440 590 L480 640 L410 760"/>
+      <path d="M512 470 L600 600 L560 650 L640 770"/>
+    </g>
+
+    <!-- central aggressive eye / core -->
+    <circle cx="512" cy="470" r="150" fill="url(#eyeGlow)"/>
+    <circle cx="512" cy="470" r="86" fill="#0a0a0a" stroke="#ff2b2b" stroke-width="8"/>
+    <path d="M512 400 L556 470 L512 540 L468 470 Z" fill="#ff2b2b"/>
+
+    <!-- sharp fang/spike accents at shield shoulders -->
+    <path d="M240 210 L300 170 L280 260 Z" fill="#ff2b2b" opacity="0.85"/>
+    <path d="M784 210 L724 170 L744 260 Z" fill="#ff2b2b" opacity="0.85"/>
+  </g>
+
+  <!-- top rivets -->
+  <circle cx="512" cy="150" r="10" fill="#ff2b2b"/>
+  <circle cx="330" cy="215" r="7" fill="#8a0000"/>
+  <circle cx="694" cy="215" r="7" fill="#8a0000"/>
+</svg>

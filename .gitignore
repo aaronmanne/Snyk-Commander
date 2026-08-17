@@ -10,6 +10,7 @@
 
 # Electron builder output
 /release/
+/dist-electron/
 
 # Environment files
 .env

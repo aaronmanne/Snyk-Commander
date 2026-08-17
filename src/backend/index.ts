@@ -235,7 +235,13 @@ export async function invoke(
       if (!issueId) throw new Error('issue_id is required');
 
       const client = new SnykClient(token);
-      await client.ignoreIssue(orgId, projectId, issueId, reason, expires);
+      // disregardIfFixable=false: this is an explicit, manual ignore action
+      // (single ignore button, reachability "not reachable" ignore, etc.).
+      // If we left this true, Snyk silently SKIPS creating the ignore whenever
+      // a fix happens to be available for the issue — even though reachability
+      // is unrelated to fixability, so many "not reachable" vulns do have a fix.
+      // The user explicitly chose to ignore this issue, so it must always stick.
+      await client.ignoreIssue(orgId, projectId, issueId, reason, expires, false);
       return { ok: true };
     }
 
@@ -406,6 +412,12 @@ export async function stream(
       const expires =
         String(params['expires'] ?? '') ||
         new Date(Date.now() + 90 * 86400 * 1000).toISOString().replace(/\.\d+Z$/, '.000Z');
+      // Defaults to true (matches the Ignore Manager's "no known fix" use case,
+      // where it's a no-op anyway). Callers targeting arbitrary/filtered
+      // vulnerabilities that might include fixable issues (e.g. Vulnerabilities
+      // page "Ignore All") should pass disregard_if_fixable=false so the ignore
+      // always sticks regardless of fix availability.
+      const disregardIfFixable = params['disregard_if_fixable'] !== false;
 
       if (!orgId) throw new Error('org_id is required');
       if (!token) throw new Error('token is required');
@@ -417,7 +429,7 @@ export async function stream(
 
       return ignores.applyIgnores(client, orgId, operations, reason, expires, (progress) => {
         onEvent('progress', progress);
-      });
+      }, disregardIfFixable);
     }
 
     // ── reachability.analyze ──────────────────────────────────────────────

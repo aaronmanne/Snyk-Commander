@@ -91,6 +91,7 @@ export interface IgnoreOperation {
   risk_score?: number | null
   display_path?: string
   project_name?: string
+  action?: 'ignore' | 'unignore'
 }
 
 export interface IgnoreAnalysis {

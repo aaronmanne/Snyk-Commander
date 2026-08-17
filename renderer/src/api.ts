@@ -100,12 +100,13 @@ export async function applyIgnores(
   operations: unknown[],
   reason: string,
   expires: string,
-  onProgress: (data: unknown) => void
+  onProgress: (data: unknown) => void,
+  disregard_if_fixable = true,
 ): Promise<{ succeeded: number; failed: number }> {
   const channel = api().newStreamChannel()
   try {
     const result = await api().stream('ignores.apply', {
-      org_id, token, operations, reason, expires
+      org_id, token, operations, reason, expires, disregard_if_fixable
     }, channel, onProgress)
     return result as { succeeded: number; failed: number }
   } finally {

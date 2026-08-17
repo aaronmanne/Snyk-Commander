@@ -203,6 +203,7 @@ export interface IgnoreOperation {
   project_id: string;
   project_name: string;
   display_path: string;
+  action: 'ignore' | 'unignore';
 }
 
 export interface IgnoreAnalysis {
@@ -264,7 +265,7 @@ export function analyzeIgnores(
 
       const alreadyIgnored = vulnId in existingIgnores;
 
-      const entry: IgnoreOperation = {
+      const baseEntry = {
         vuln_id: vulnId,
         title: (issueData['title'] as string) ?? vulnId,
         severity,
@@ -276,10 +277,10 @@ export function analyzeIgnores(
       };
 
       if (qualifies) {
-        if (alreadyIgnored) toUpdate.push(entry);
-        else toIgnore.push(entry);
+        if (alreadyIgnored) toUpdate.push({ ...baseEntry, action: 'ignore' });
+        else toIgnore.push({ ...baseEntry, action: 'ignore' });
       } else if (alreadyIgnored && fixable) {
-        toUnignore.push(entry);
+        toUnignore.push({ ...baseEntry, action: 'unignore' });
       }
     }
   }
@@ -315,10 +316,11 @@ async function applyWithRetry(
 export async function applyIgnores(
   client: SnykClient,
   orgId: string,
-  operations: Array<{ action: 'ignore' | 'unignore'; vuln_id: string; project_id: string }>,
+  operations: Array<{ action?: 'ignore' | 'unignore'; vuln_id: string; project_id: string }>,
   reason: string,
   expires: string,
   onProgress: (p: ApplyProgress) => void,
+  disregardIfFixable = true,
 ): Promise<{ succeeded: number; failed: number }> {
   if (operations.length === 0) return { succeeded: 0, failed: 0 };
 
@@ -336,9 +338,15 @@ export async function applyIgnores(
       const i = idx++;
       const op = operations[i];
 
+      // Default to 'ignore' unless explicitly 'unignore'. This guards against
+      // callers accidentally omitting the `action` field — silently treating
+      // an unrecognised/missing action as an unignore would mean nothing ever
+      // gets ignored, which is far more dangerous than the reverse.
+      const action: 'ignore' | 'unignore' = op.action === 'unignore' ? 'unignore' : 'ignore';
+
       const { ok, error } = await applyWithRetry(async () => {
-        if (op.action === 'ignore') {
-          await client.ignoreIssue(orgId, op.project_id, op.vuln_id, reason, expires, true);
+        if (action === 'ignore') {
+          await client.ignoreIssue(orgId, op.project_id, op.vuln_id, reason, expires, disregardIfFixable);
         } else {
           await client.unignoreIssue(orgId, op.project_id, op.vuln_id);
         }
@@ -349,7 +357,7 @@ export async function applyIgnores(
       else failed++;
 
       onProgress({
-        action: op.action,
+        action,
         vuln_id: op.vuln_id,
         project_id: op.project_id,
         status: ok ? 'ok' : 'error',

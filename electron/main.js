@@ -22,19 +22,30 @@ const {
 } = require('electron');
 const path = require('path');
 
+// Ensure a consistent app name (and therefore userData path) whether running
+// from source in dev mode or from a packaged .app bundle.
+app.setName('Snyk Commander');
+
 // ── Constants ──────────────────────────────────────────────────────────────
 const IS_DEV = process.env.NODE_ENV === 'development';
 const APP_ROOT = path.join(__dirname, '..');
 const RENDERER_DEV_URL = 'http://localhost:5173';
 const RENDERER_PROD_PATH = path.join(APP_ROOT, 'renderer', 'dist', 'index.html');
 
+// Writable per-user data directory (e.g. ~/Library/Application Support/Snyk Commander
+// on macOS). APP_ROOT itself is only used to locate bundled, read-only assets
+// (the compiled backend + renderer) — once packaged into a signed .app bundle,
+// that location is read-only, so all runtime data (scan cache, reports,
+// generated .snyk ignore files) MUST live under userData instead.
+const USER_DATA_DIR = app.getPath('userData');
+
 // ── Backend context ────────────────────────────────────────────────────────
 const ctx = {
   appRoot: APP_ROOT,
-  cacheDir: path.join(APP_ROOT, '.snyk_cache'),
-  reportsDir: path.join(APP_ROOT, 'reports'),
-  snykIgnoresDir: path.join(APP_ROOT, 'snyk-ignores'),
-  snykFilePath: path.join(APP_ROOT, '.snyk'),
+  cacheDir: path.join(USER_DATA_DIR, '.snyk_cache'),
+  reportsDir: path.join(USER_DATA_DIR, 'reports'),
+  snykIgnoresDir: path.join(USER_DATA_DIR, 'snyk-ignores'),
+  snykFilePath: path.join(USER_DATA_DIR, '.snyk'),
 };
 
 // ── Load backend ───────────────────────────────────────────────────────────

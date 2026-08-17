@@ -140,6 +140,7 @@ export default function VulnerabilitiesView() {
     try {
       // Create operations for all filtered issues
       const operations = filtered.map(fi => ({
+        action: 'ignore' as const,
         vuln_id: fi.issue.id,
         project_id: fi.projectId,
         title: fi.issue.issueData.title,
@@ -148,14 +149,21 @@ export default function VulnerabilitiesView() {
         project_name: fi.projectName,
       }))
 
-      // Use the applyIgnores API
+      // Use the applyIgnores API — all ignores expire 90 days from now.
+      // disregardIfFixable=false because this list is based on whatever the
+      // user has filtered to (severity, reachability, etc.) and may include
+      // vulnerabilities that DO have a fix available. Snyk silently skips
+      // creating an ignore when disregardIfFixable=true and a fix exists, so
+      // we must pass false to guarantee the ignore is actually applied.
+      const expires = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString()
       const result = await applyIgnores(
         state.selectedOrg.id,
         state.token,
         operations,
         'Bulk ignored from vulnerabilities view based on applied filters.',
-        '90d',
-        () => {} // No progress callback needed
+        expires,
+        () => {}, // No progress callback needed
+        false
       )
 
       setIgnoreAllSuccess(true)
@@ -191,8 +199,7 @@ export default function VulnerabilitiesView() {
         state.token,
         fi.projectId,
         fi.issue.id,
-        reason,
-        '90d'
+        reason
       )
 
       setIgnoreSuccess(key)

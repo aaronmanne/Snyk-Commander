@@ -193,7 +193,23 @@ export default function ReachabilityView() {
   const [batchResults, setBatchResults] = useState<BatchResultItem[]>([])
   const [batchProgress, setBatchProgress] = useState({ current: 0, total: 0 })
   const [batchComplete, setBatchComplete] = useState(false)
-  const [showBatchReport, setShowBatchReport] = useState(false)
+  // Severity filter for "Analyze All" — empty set = all severities included
+  const [batchSeverityFilter, setBatchSeverityFilter] = useState<Set<string>>(new Set())
+
+  const toggleBatchSeverity = (sev: string) => {
+    setBatchSeverityFilter(prev => {
+      const next = new Set(prev)
+      if (next.has(sev)) next.delete(sev)
+      else next.add(sev)
+      return next
+    })
+  }
+
+  // Issues that will actually be analyzed by "Analyze All", after severity filter is applied
+  const batchTargetIssues = useMemo(() => {
+    if (batchSeverityFilter.size === 0) return allIssues
+    return allIssues.filter(fi => batchSeverityFilter.has(fi.issue.issueData.severity))
+  }, [allIssues, batchSeverityFilter])
 
   const initPhases = (): PhaseStatus[] =>
     PHASES.map(p => ({ phase: p, status: 'pending' as const, message: '' }))
@@ -409,13 +425,13 @@ export default function ReachabilityView() {
 
   // ── Batch Analysis Handler ───────────────────────────────────────────────────
   const handleAnalyzeAll = async () => {
-    if (allIssues.length === 0) return
+    const targetIssues = batchTargetIssues
+    if (targetIssues.length === 0) return
 
     setBatchMode(true)
     setBatchComplete(false)
-    setShowBatchReport(false)
     setBatchResults([])
-    setBatchProgress({ current: 0, total: allIssues.length })
+    setBatchProgress({ current: 0, total: targetIssues.length })
 
     // Add a fake background job to show batch progress
     const batchJobId = `batch-${Date.now()}`
@@ -424,7 +440,7 @@ export default function ReachabilityView() {
       projectId: 'batch',
       issueId: 'batch',
       issueName: 'Batch Analysis',
-      projectName: `Analyzing ${allIssues.length} vulnerabilities`,
+      projectName: `Analyzing ${targetIssues.length} vulnerabilities`,
       status: 'running',
       progress: { phase: 'analyzing', message: 'Running batch analysis...', pct: 0 },
       startedAt: Date.now(),
@@ -432,15 +448,15 @@ export default function ReachabilityView() {
 
     const results: BatchResultItem[] = []
     
-    for (let i = 0; i < allIssues.length; i++) {
-      const issue = allIssues[i]
-      setBatchProgress({ current: i + 1, total: allIssues.length })
+    for (let i = 0; i < targetIssues.length; i++) {
+      const issue = targetIssues[i]
+      setBatchProgress({ current: i + 1, total: targetIssues.length })
       
       // Update batch job progress
       updateBackgroundJob(batchJobId, 'running', {
         phase: 'analyzing',
-        message: `Analyzing ${i + 1} of ${allIssues.length}`,
-        pct: Math.round(((i + 1) / allIssues.length) * 100)
+        message: `Analyzing ${i + 1} of ${targetIssues.length}`,
+        pct: Math.round(((i + 1) / targetIssues.length) * 100)
       })
       
       try {
@@ -481,13 +497,12 @@ export default function ReachabilityView() {
 
     setBatchResults(results)
     setBatchComplete(true)
-    setShowBatchReport(true)
     setBatchMode(false)
     
     // Mark batch job as complete and remove after 3 seconds
     updateBackgroundJob(batchJobId, 'completed', {
       phase: 'done',
-      message: `Analyzed ${allIssues.length} vulnerabilities`,
+      message: `Analyzed ${targetIssues.length} vulnerabilities`,
       pct: 100
     })
     setTimeout(() => removeBackgroundJob(batchJobId), 3000)
@@ -752,6 +767,45 @@ export default function ReachabilityView() {
             )}
           </div>
 
+          {/* Severity filter for Analyze All */}
+          <div className="mb-3">
+            <label className="block text-xs font-medium text-text-muted mb-2">
+              Analyze All — Filter by Severity <span className="text-text-secondary">({batchTargetIssues.length} of {allIssues.length} vulnerabilities selected)</span>
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {(['critical', 'high', 'medium', 'low'] as const).map(sev => {
+                const active = batchSeverityFilter.has(sev)
+                const count = allIssues.filter(fi => fi.issue.issueData.severity === sev).length
+                return (
+                  <button
+                    key={sev}
+                    type="button"
+                    onClick={() => toggleBatchSeverity(sev)}
+                    disabled={batchMode}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium capitalize transition-colors disabled:opacity-50 ${
+                      active
+                        ? 'bg-accent-purple/20 border-accent-purple/50 text-accent-purple'
+                        : 'border-border text-text-muted hover:border-accent-purple/40 hover:text-accent-purple'
+                    }`}
+                  >
+                    <SeverityBadge severity={sev} showDot />
+                    <span>{count}</span>
+                  </button>
+                )
+              })}
+              {batchSeverityFilter.size > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setBatchSeverityFilter(new Set())}
+                  disabled={batchMode}
+                  className="text-xs text-text-muted hover:text-text-primary transition-colors disabled:opacity-50"
+                >
+                  Clear (all severities)
+                </button>
+              )}
+            </div>
+          </div>
+
           {/* Row 4: Run / Rescan / Analyze All buttons */}
           <div className="flex gap-3">
             <button
@@ -764,12 +818,12 @@ export default function ReachabilityView() {
             </button>
             <button
               onClick={handleAnalyzeAll}
-              disabled={batchMode || running || allIssues.length === 0}
+              disabled={batchMode || running || batchTargetIssues.length === 0}
               className="btn-secondary justify-center py-3 px-6 whitespace-nowrap"
-              title="Analyze all vulnerabilities one by one"
+              title="Analyze all vulnerabilities matching the severity filter, one by one"
             >
               {batchMode ? <Loader2 size={18} className="animate-spin" /> : <FlaskConical size={18} />}
-              {batchMode ? `Analyzing ${batchProgress.current}/${batchProgress.total}...` : 'Analyze All'}
+              {batchMode ? `Analyzing ${batchProgress.current}/${batchProgress.total}...` : `Analyze All (${batchTargetIssues.length})`}
             </button>
           </div>
         </div>
@@ -994,8 +1048,8 @@ export default function ReachabilityView() {
           </div>
         )}
 
-        {/* ── Batch Report ──────────────────────────────────────────────────────── */}
-        {showBatchReport && batchComplete && batchResults.length > 0 && (
+        {/* ── Batch Report ── Always shown once a batch analysis has completed ──── */}
+        {batchComplete && batchResults.length > 0 && (
           <div className="space-y-5 mt-6">
             <div className="bg-bg-secondary border border-border rounded-xl p-5">
               <div className="flex items-center justify-between mb-4">
@@ -1003,12 +1057,6 @@ export default function ReachabilityView() {
                   <h2 className="text-lg font-bold text-text-primary">Batch Analysis Report</h2>
                   <p className="text-text-muted text-sm mt-1">Analyzed {batchResults.length} vulnerabilities</p>
                 </div>
-                <button
-                  onClick={() => setShowBatchReport(false)}
-                  className="text-text-muted hover:text-text-secondary transition-colors"
-                >
-                  <X size={20} />
-                </button>
               </div>
 
               {/* Summary cards */}
