@@ -168,10 +168,15 @@ export async function scanOrg(
           client.getProjectIgnores(org.id, proj.id),
         ]);
 
-        const issuesRaw    = issuesResult.status       === 'fulfilled' ? issuesResult.value       : [];
-        const ignored      = ignoredResult.status      === 'fulfilled' ? ignoredResult.value      : [];
-        const ignoresMap   = ignoresMapResult.status   === 'fulfilled' ? ignoresMapResult.value   : {};
+        if (issuesResult.status !== 'fulfilled') {
+          throw (issuesResult.reason instanceof Error
+            ? issuesResult.reason
+            : new Error(String(issuesResult.reason)));
+        }
 
+        const issuesRaw = issuesResult.value;
+        const ignored = ignoredResult.status === 'fulfilled' ? ignoredResult.value : [];
+        const ignoresMap = ignoresMapResult.status === 'fulfilled' ? ignoresMapResult.value : {};
         // Defensive cross-filter: never show an issue as "active" if Snyk's
         // ignored-issues list also reports it as ignored (see excludeIgnored doc).
         const issues = excludeIgnored(issuesRaw, ignored);
