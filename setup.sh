@@ -89,7 +89,7 @@ fi
 # ── 3. Install renderer dependencies ─────────────────────────────────────────
 info "Installing renderer dependencies..."
 cd renderer
-npm install --include=dev --ignore-scripts 2>&1 | grep -v "^npm warn\|^npm notice" || true
+npm install --include=dev --ignore-scripts
 node node_modules/esbuild/install.js 2>/dev/null || npm install-scripts approve esbuild 2>/dev/null || true
 cd ..
 
