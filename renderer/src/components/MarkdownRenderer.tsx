@@ -215,13 +215,11 @@ function splitInline(text: string): React.ReactNode[] {
       )
     } else if (match[5] !== undefined && match[6] !== undefined) {
       // [link](url)
-      result.push(
         <a key={match.index} href={match[6]}
            className="text-accent-purple hover:underline"
-           onClick={e => { e.preventDefault(); window.snykAPI?.openPath(match![6]).catch(() => {}) }}>
+           onClick={e => { e.preventDefault(); window.open(match![6], '_blank', 'noopener,noreferrer') }}>
           {match[5]}
         </a>
-      )
     }
     last = match.index + match[0].length
   }
