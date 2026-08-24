@@ -27,8 +27,7 @@ info "Node $(node --version) / npm $(npm --version)"
 
 # ── 2. Install root dependencies ─────────────────────────────────────────────
 info "Installing root dependencies..."
-npm install --include=dev --ignore-scripts 2>&1 | grep -v "^npm warn\|^npm notice" || true
-
+npm install --include=dev --ignore-scripts
 # Approve and run install scripts for electron and esbuild
 info "Running electron install script..."
 node node_modules/electron/install.js 2>/dev/null || true
