@@ -2,7 +2,6 @@
  * src/backend/reachabilityJobs.ts — Background job manager for reachability analysis
  */
 
-import * as path from 'path';
 import * as reachability from './reachability';
 import { ReachabilityStorage, type ReachabilityResult } from './reachabilityStorage';
 
