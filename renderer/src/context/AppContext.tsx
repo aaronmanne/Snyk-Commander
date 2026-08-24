@@ -107,6 +107,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState)
 
   const setToken = useCallback((token: string) => {
+    if (token) localStorage.setItem('snyk_token', token)
+    else localStorage.removeItem('snyk_token')
     dispatch({ type: 'SET_TOKEN', token })
   }, [])
 
