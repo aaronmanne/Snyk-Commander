@@ -48,6 +48,7 @@ function writeConfig(cfg: StoredConfig): void {
   try {
     if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), 'utf8');
+    try { fs.chmodSync(CONFIG_PATH, 0o600); } catch { /* best-effort */ }
   } catch (err) {
     console.warn('[oauth] Failed to write config:', err);
   }
