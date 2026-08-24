@@ -84,9 +84,6 @@ async function fetchWithRetry(
     try {
       resp = await fetch(url, { ...options, signal: controller.signal });
     } catch (err: unknown) {
-      clearTimeout(timer);
-      release();
-
       const isAbort = err instanceof Error &&
         (err.name === 'AbortError' || err.message.includes('abort'));
 
