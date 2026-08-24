@@ -1,37 +1,39 @@
-/reports/
-/.snyk_cache/
-/.idea/
-# Python
-__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-
-# Virtual environments
-.venv/
-venv/
-env/
-
-# Tool caches
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.tox/
-
-# Coverage
-.coverage
-htmlcov/
-
 # Build artifacts
-build/
-dist/
-*.egg-info/
+/dist/
+/renderer/dist/
+/node_modules/
+/renderer/node_modules/
+
+# Cache & runtime data
+/.snyk_cache/
+/reports/
+
+# Electron builder output
+/release/
+/dist-electron/
 
 # Environment files
 .env
-.python-version
+.env.*
 
 # macOS
 .DS_Store
+
+# IDE
+/.idea/
+/.vscode/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Snyk policy & ignores (generated)
 /.snyk
 /snyk-ignores/
+
+# Legacy Python (no longer used)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
