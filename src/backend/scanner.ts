@@ -151,8 +151,6 @@ export async function scanOrg(
 
   // Pool of workers — each grabs the next project, scans it, fires progress
   let idx = 0;
-  const mu = { val: 0 }; // simple mutex-free counter (JS is single-threaded for sync ops)
-
   async function worker(): Promise<void> {
     while (true) {
       // Grab next project index atomically (JS event loop guarantees this is safe)
